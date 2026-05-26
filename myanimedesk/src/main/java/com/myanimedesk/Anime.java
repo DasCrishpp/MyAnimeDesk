@@ -10,6 +10,13 @@ public class Anime {
     public int duration;
     public List<String> genres;
     public Status status = Status.TO_WATCH;
+    
+    // Nuovi campi reali richiesti per le info estese
+    public String format;        // es. TV, MOVIE, OVA
+    public String airingStatus;  // es. In Corso, Concluso
+    public String year;          // es. 2026
+    public String season;        // es. Primavera, Estate
+    public String studio;        // es. BUG FILMS
 
     public enum Status { TO_WATCH, WATCHING, WATCHED, DROPPED }
 
@@ -17,7 +24,7 @@ public class Anime {
         return switch (status) {
             case TO_WATCH -> "Da vedere";
             case WATCHING -> "In visione";
-            case WATCHED -> "Visti";
+            case WATCHED -> "Visto"; // Corretto da "Visti" a "Visto"
             case DROPPED -> "Droppato";
         };
     }
@@ -27,7 +34,7 @@ public class Anime {
         return switch (s) {
             case "Da vedere" -> Status.TO_WATCH;
             case "In visione" -> Status.WATCHING;
-            case "Visti" -> Status.WATCHED;
+            case "Visto", "Visti" -> Status.WATCHED; // Accetta entrambi per compatibilità con vecchi salvataggi
             case "Droppato" -> Status.DROPPED;
             default -> {
                 try {

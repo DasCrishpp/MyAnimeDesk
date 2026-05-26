@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+Created-By: Apache Maven 3.9.16
+Built-By: crist
+Build-Jdk: 26.0.1
+
