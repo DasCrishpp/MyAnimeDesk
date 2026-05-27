@@ -25,9 +25,11 @@ import javafx.util.Duration;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ExecutorService;
@@ -44,6 +46,9 @@ public class App extends Application {
     private VBox dashboardPane, libraryPane, searchPane, settingsPane;
     
     private TilePane libraryGrid, searchGrid;
+    private VBox discoverContent;
+    private Popup suggestionPopup;
+    private ListView<Anime> suggestionList;
     private HBox dashboardWatchingRow;
 
     private Label totalHoursLabel, watchingCountLabel, completedCountLabel;
@@ -58,16 +63,14 @@ public class App extends Application {
     private ImageView coverView;
     private Label titleLabel, metaLabel;
     private VBox extendedInfoBox; // Sostituito TextArea con VBox strutturato
-    private ComboBox<String> statusCombo;
     private Button addButton, removeButton;
+    private Button detailPlanButton, detailWatchingButton, detailWatchedButton, detailDroppedButton;
     
     private Label statusBar;
     private Anime activeAnime;
     private String currentLibraryFilter = "TUTTI";
     private Button activeMenuButton = null;
 
-    // Impostazioni Suono
-    private boolean soundEnabled = true;
 
     // Helper interno per filtrare i dati senza modificare AnimeListManager
     private List<Anime> getByStatus(Anime.Status status) {
@@ -103,6 +106,7 @@ public class App extends Application {
         root.setBottom(createStatusBar());
 
         Scene scene = new Scene(root, 1280, 820);
+        installModernScrollBarStyle(scene);
         stage.setScene(scene);
         stage.show();
 
@@ -114,43 +118,24 @@ public class App extends Application {
         }
     }
 
-    // --- GENERATORE DI SUONI PROCEDURALI DI SISTEMA ---
-    private void playSynthesizedSound(int frequency, int durationMs, double volumeMultiplier) {
-        if (!soundEnabled) return;
-        executor.submit(() -> {
-            try {
-                byte[] buf = new byte[durationMs * 8];
-                for (int i = 0; i < buf.length; i++) {
-                    double angle = i / (8000.0 / frequency) * 2.0 * Math.PI;
-                    buf[i] = (byte) (Math.sin(angle) * 25.0 * volumeMultiplier * (1.0 - (double) i / buf.length));
-                }
-                javax.sound.sampled.AudioFormat af = new javax.sound.sampled.AudioFormat(8000f, 8, 1, true, false);
-                javax.sound.sampled.SourceDataLine sdl = javax.sound.sampled.AudioSystem.getSourceDataLine(af);
-                sdl.open(af);
-                sdl.start();
-                sdl.write(buf, 0, buf.length);
-                sdl.drain();
-                sdl.close();
-            } catch (Exception e) {
-                java.awt.Toolkit.getDefaultToolkit().beep(); 
-            }
-        });
-    }
+    // --- SUONI UI DISATTIVATI ---
+    private void playHoverSound() { }
 
-    private void playHoverSound() {
-        playSynthesizedSound(580, 35, 0.6); 
-    }
-
-    private void playClickSound() {
-        playSynthesizedSound(420, 70, 0.9); 
-    }
+    private void playClickSound() { }
 
     // --- SIDEBAR ---
     private VBox createSidebar() {
         VBox sidebar = new VBox(12);
         sidebar.setPadding(new Insets(30, 15, 20, 15));
         sidebar.setPrefWidth(230);
-        sidebar.setStyle("-fx-background-color: #040814; -fx-border-color: rgba(255,255,255,0.05); -fx-border-width: 0 1 0 0;");
+        sidebar.setStyle(
+            "-fx-background-color: linear-gradient(to bottom, #070d1c, #020617);" +
+            "-fx-background-radius: 0 26 26 0;" +
+            "-fx-border-radius: 0 26 26 0;" +
+            "-fx-border-color: transparent rgba(255,255,255,0.08) transparent transparent;" +
+            "-fx-border-width: 0 1 0 0;" +
+            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.35), 22, 0.18, 5, 0);"
+        );
 
         Label logo = new Label("MyAnimeDesk"); 
         logo.setTextFill(Color.web("#4d7cff"));
@@ -175,19 +160,18 @@ public class App extends Application {
         Button btn = new Button(text);
         btn.setAlignment(Pos.CENTER_LEFT);
         btn.setPrefWidth(200);
-        btn.setPadding(new Insets(12, 16, 12, 16));
+        btn.setMinHeight(46);
+        btn.setPadding(new Insets(12, 18, 12, 18));
         btn.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 14));
-        btn.setStyle("-fx-background-color: #0d1527; -fx-text-fill: #94a3b8; -fx-background-radius: 8; -fx-border-color: #1e293b; -fx-border-width: 1; -fx-cursor: hand;");
-
+        btn.setStyle("-fx-background-color: rgba(15, 23, 42, 0.92); -fx-text-fill: #94a3b8; -fx-background-radius: 18; -fx-border-radius: 18; -fx-border-color: rgba(148,163,184,0.16); -fx-border-width: 1; -fx-cursor: hand;");
         btn.setOnMouseEntered(e -> {
             if (btn != activeMenuButton) {
-                playHoverSound();
-                btn.setStyle("-fx-background-color: #16223f; -fx-text-fill: #ffffff; -fx-background-radius: 8; -fx-border-color: #3b82f6; -fx-border-width: 1; -fx-cursor: hand;");
+                btn.setStyle("-fx-background-color: rgba(30, 41, 72, 0.98); -fx-text-fill: white; -fx-background-radius: 18; -fx-border-radius: 18; -fx-border-color: rgba(96,165,250,0.75); -fx-border-width: 1; -fx-effect: dropshadow(gaussian, rgba(59,130,246,0.25), 12, 0.25, 0, 3); -fx-cursor: hand;");
             }
         });
         btn.setOnMouseExited(e -> {
             if (btn != activeMenuButton) {
-                btn.setStyle("-fx-background-color: #0d1527; -fx-text-fill: #94a3b8; -fx-background-radius: 8; -fx-border-color: #1e293b; -fx-border-width: 1; -fx-cursor: hand;");
+                btn.setStyle("-fx-background-color: rgba(15, 23, 42, 0.92); -fx-text-fill: #94a3b8; -fx-background-radius: 18; -fx-border-radius: 18; -fx-border-color: rgba(148,163,184,0.16); -fx-border-width: 1; -fx-cursor: hand;");
             }
         });
         return btn;
@@ -195,10 +179,10 @@ public class App extends Application {
 
     private void selectMenuButton(Button target) {
         if (activeMenuButton != null) {
-            activeMenuButton.setStyle("-fx-background-color: #0d1527; -fx-text-fill: #94a3b8; -fx-background-radius: 8; -fx-border-color: #1e293b; -fx-border-width: 1; -fx-cursor: hand;");
+            activeMenuButton.setStyle("-fx-background-color: rgba(15, 23, 42, 0.92); -fx-text-fill: #94a3b8; -fx-background-radius: 18; -fx-border-radius: 18; -fx-border-color: rgba(148,163,184,0.16); -fx-border-width: 1; -fx-cursor: hand;");
         }
         activeMenuButton = target;
-        activeMenuButton.setStyle("-fx-background-color: #3b82f6; -fx-text-fill: #ffffff; -fx-background-radius: 8; -fx-border-color: #60a5fa; -fx-border-width: 1; -fx-cursor: hand;");
+        activeMenuButton.setStyle("-fx-background-color: linear-gradient(to right, #3b82f6, #6366f1); -fx-text-fill: white; -fx-background-radius: 18; -fx-border-radius: 18; -fx-border-color: rgba(147,197,253,0.85); -fx-border-width: 1; -fx-effect: dropshadow(gaussian, rgba(59,130,246,0.35), 16, 0.25, 0, 4); -fx-cursor: hand;");
     }
 
     private void showView(VBox targetPane) {
@@ -211,6 +195,40 @@ public class App extends Application {
             } else { p.setVisible(false); }
         }
         detailOverlay.setVisible(false);
+    }
+
+
+    private void installModernScrollBarStyle(Scene scene) {
+        try {
+            String css = """
+                .scroll-pane { -fx-background-color: transparent; -fx-background: transparent; }
+                .scroll-pane > .viewport { -fx-background-color: transparent; }
+                .scroll-bar:vertical, .scroll-bar:horizontal {
+                    -fx-background-color: transparent;
+                    -fx-padding: 2;
+                }
+                .scroll-bar .track { -fx-background-color: transparent; }
+                .scroll-bar .thumb {
+                    -fx-background-color: rgba(71, 85, 105, 0.55);
+                    -fx-background-radius: 999;
+                }
+                .scroll-bar .thumb:hover { -fx-background-color: rgba(96, 165, 250, 0.75); }
+                .scroll-bar .increment-button, .scroll-bar .decrement-button {
+                    -fx-background-color: transparent;
+                    -fx-padding: 0;
+                }
+                .scroll-bar .increment-arrow, .scroll-bar .decrement-arrow {
+                    -fx-shape: "";
+                    -fx-padding: 0;
+                }
+                .list-view, .list-cell { -fx-background-color: transparent; }
+                .list-cell:filled:hover { -fx-background-color: rgba(30, 41, 59, 0.95); -fx-background-radius: 10; }
+                .list-cell:filled:selected { -fx-background-color: rgba(37, 99, 235, 0.32); -fx-background-radius: 10; }
+            """;
+            Path cssFile = Files.createTempFile("myanimedesk-ui-", ".css");
+            Files.writeString(cssFile, css);
+            scene.getStylesheets().add(cssFile.toUri().toString());
+        } catch (Exception ignored) { }
     }
 
     // --- 1. DASHBOARD ---
@@ -348,7 +366,7 @@ public class App extends Application {
         }
     }
 
-    // --- 3. RICERCA RAPIDA DEBOUNCED ---
+    // --- 3. RICERCA / SCOPRI ---
     private void initSearchPane() {
         searchPane = new VBox(18);
 
@@ -357,52 +375,311 @@ public class App extends Application {
         title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 26));
 
         searchField = new TextField();
-        searchField.setPromptText("Digita il titolo di un anime...");
-        searchField.setPrefWidth(550);
-        searchField.setStyle("-fx-background-color: #16223f; -fx-text-fill: white; -fx-prompt-text-fill: #64748b; -fx-background-radius: 12; -fx-border-radius: 12; -fx-border-color: #3b82f6; -fx-padding: 12; -fx-font-size: 14px;");
-        
+        searchField.setPromptText("Cerca un anime...");
+        searchField.setPrefWidth(620);
+        searchField.setMaxWidth(620);
+        searchField.setStyle("-fx-background-color: #111b34; -fx-text-fill: white; -fx-prompt-text-fill: #64748b; -fx-background-radius: 18; -fx-border-radius: 18; -fx-border-color: #334155; -fx-padding: 13 16; -fx-font-size: 14px;");
         searchField.textProperty().addListener((observable, oldValue, newValue) -> triggerDebouncedSearch(newValue.trim()));
 
-        searchGrid = new TilePane();
-        searchGrid.setHgap(10); 
-        searchGrid.setVgap(10);
-        searchGrid.setPrefColumns(5);
+        setupSuggestionPopup();
 
-        ScrollPane scrollPane = new ScrollPane(searchGrid);
+        discoverContent = new VBox(24);
+        discoverContent.setPadding(new Insets(4, 0, 22, 0));
+
+        ScrollPane scrollPane = new ScrollPane(discoverContent);
         scrollPane.setFitToWidth(true);
         scrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent; -fx-border-color: transparent;");
 
         searchPane.getChildren().addAll(title, searchField, scrollPane);
+        loadDiscoverHome();
+    }
+
+    private void setupSuggestionPopup() {
+        suggestionPopup = new Popup();
+        suggestionPopup.setAutoHide(true);
+
+        VBox box = new VBox(6);
+        box.setPrefWidth(620);
+        box.setStyle(
+            "-fx-background-color: #0b1224;" +
+            "-fx-background-radius: 16;" +
+            "-fx-border-radius: 16;" +
+            "-fx-border-color: rgba(96,165,250,0.35);" +
+            "-fx-border-width: 1;" +
+            "-fx-padding: 8;" +
+            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.50), 22, 0.25, 0, 10);"
+        );
+
+        suggestionList = new ListView<>();
+        suggestionList.setPrefHeight(330);
+        suggestionList.setStyle("-fx-background-color: transparent; -fx-control-inner-background: transparent; -fx-border-color: transparent;");
+        suggestionList.setCellFactory(list -> new ListCell<>() {
+            @Override
+            protected void updateItem(Anime anime, boolean empty) {
+                super.updateItem(anime, empty);
+                if (empty || anime == null) {
+                    setGraphic(null);
+                    setText(null);
+                    setStyle("-fx-background-color: transparent;");
+                    return;
+                }
+
+                ImageView miniCover = new ImageView();
+                miniCover.setFitWidth(44);
+                miniCover.setFitHeight(62);
+                miniCover.setPreserveRatio(false);
+                if (anime.coverImage != null && !anime.coverImage.isBlank()) {
+                    miniCover.setImage(new Image(anime.coverImage, 44, 62, false, true, true));
+                }
+                miniCover.setStyle("-fx-background-radius: 8;");
+
+                VBox texts = new VBox(4);
+                texts.setAlignment(Pos.CENTER_LEFT);
+                Label name = new Label(anime.title != null ? anime.title : "Titolo sconosciuto");
+                name.setTextFill(Color.web("#f8fafc"));
+                name.setFont(Font.font("Segoe UI", FontWeight.BOLD, 14));
+                name.setWrapText(true);
+
+                Label meta = new Label(formatValue(anime.format) + " • " + formatEpisodes(anime.episodes) + " ep • " + formatValue(anime.year));
+                meta.setTextFill(Color.web("#94a3b8"));
+                meta.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 11));
+
+                Label genreLine = new Label(anime.genres != null && !anime.genres.isEmpty() ? String.join(", ", anime.genres.subList(0, Math.min(3, anime.genres.size()))) : "");
+                genreLine.setTextFill(Color.web("#64748b"));
+                genreLine.setFont(Font.font("Segoe UI", 11));
+
+                texts.getChildren().addAll(name, meta, genreLine);
+                HBox row = new HBox(10, miniCover, texts);
+                row.setAlignment(Pos.CENTER_LEFT);
+                row.setPadding(new Insets(7, 8, 7, 8));
+
+                setGraphic(row);
+                setStyle("-fx-background-color: transparent; -fx-padding: 2; -fx-cursor: hand;");
+            }
+        });
+        suggestionList.setOnMouseClicked(e -> {
+            Anime selected = suggestionList.getSelectionModel().getSelectedItem();
+            if (selected != null) {
+                suggestionPopup.hide();
+                searchField.setText(selected.title);
+                displaySearchResults(List.of(selected), "Risultato selezionato");
+                showAnimeDetails(selected);
+            }
+        });
+
+        Button showAll = new Button("Mostra tutti i risultati");
+        showAll.setMaxWidth(Double.MAX_VALUE);
+        showAll.setStyle("-fx-background-color: linear-gradient(to right, #2563eb, #6366f1); -fx-text-fill: white; -fx-font-weight: bold; -fx-background-radius: 12; -fx-padding: 11 14; -fx-cursor: hand; -fx-font-size: 13px;");
+        showAll.setOnAction(e -> {
+            suggestionPopup.hide();
+            executeOnlineSearch(searchField.getText().trim());
+        });
+
+        box.getChildren().addAll(suggestionList, showAll);
+        suggestionPopup.getContent().add(box);
+    }
+
+    private void loadDiscoverHome() {
+        discoverContent.getChildren().clear();
+        discoverContent.getChildren().addAll(
+            createAnimeRowSection("Popolari", "POPULAR", null),
+            createAnimeRowSection("Nuove uscite", "RECENT", null),
+            createAnimeRowSection("Romance", "GENRE", "Romance"),
+            createAnimeRowSection("Azione", "GENRE", "Action"),
+            createAnimeRowSection("Isekai", "TAG", "Isekai"),
+            createAnimeRowSection("Drama", "GENRE", "Drama"),
+            createAnimeRowSection("Slice of Life", "GENRE", "Slice of Life"),
+            createAnimeRowSection("Shōnen", "TAG", "Shounen")
+        );
+    }
+
+    private VBox createAnimeRowSection(String title, String mode, String genre) {
+        VBox section = new VBox(10);
+        HBox header = new HBox(10);
+        header.setAlignment(Pos.CENTER_LEFT);
+
+        Label lbl = new Label(title);
+        lbl.setTextFill(Color.WHITE);
+        lbl.setFont(Font.font("Segoe UI", FontWeight.BOLD, 18));
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Button seeAll = new Button("Vedi tutto");
+        seeAll.setStyle("-fx-background-color: rgba(37,99,235,0.18); -fx-text-fill: #93c5fd; -fx-font-weight: bold; -fx-background-radius: 14; -fx-padding: 7 14; -fx-cursor: hand;");
+        seeAll.setOnAction(e -> loadFullCategory(title, mode, genre));
+
+        header.getChildren().addAll(lbl, spacer, seeAll);
+
+        HBox row = new HBox(12);
+        row.setPadding(new Insets(4, 0, 10, 0));
+
+        ScrollPane rowScroll = new ScrollPane(row);
+        rowScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        rowScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        rowScroll.setFitToHeight(true);
+        rowScroll.setPannable(true);
+        rowScroll.setStyle("-fx-background: transparent; -fx-background-color: transparent; -fx-border-color: transparent;");
+
+        final int[] page = {1};
+        final boolean[] loading = {false};
+        Runnable loadMore = () -> {
+            if (loading[0]) return;
+            loading[0] = true;
+            Task<List<Anime>> task = new Task<>() {
+                @Override protected List<Anime> call() throws Exception {
+                    return client.browse(mode, genre, page[0], 14);
+                }
+            };
+            task.setOnSucceeded(evt -> {
+                for (Anime anime : task.getValue()) row.getChildren().add(createAnimeGridCard(anime));
+                page[0]++;
+                loading[0] = false;
+            });
+            task.setOnFailed(evt -> loading[0] = false);
+            executor.submit(task);
+        };
+        loadMore.run();
+        rowScroll.hvalueProperty().addListener((obs, oldVal, newVal) -> {
+            if (newVal.doubleValue() > 0.88) loadMore.run();
+        });
+
+        section.getChildren().addAll(header, rowScroll);
+        return section;
+    }
+
+    private void loadFullCategory(String title, String mode, String genre) {
+        discoverContent.getChildren().clear();
+        HBox top = new HBox(12);
+        top.setAlignment(Pos.CENTER_LEFT);
+        Button back = new Button("← Indietro");
+        back.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-background-radius: 12; -fx-padding: 8 14; -fx-cursor: hand;");
+        back.setOnAction(e -> loadDiscoverHome());
+        Label lbl = new Label(title);
+        lbl.setTextFill(Color.WHITE);
+        lbl.setFont(Font.font("Segoe UI", FontWeight.BOLD, 22));
+        top.getChildren().addAll(back, lbl);
+
+        TilePane grid = new TilePane();
+        grid.setHgap(14);
+        grid.setVgap(16);
+        grid.setPrefColumns(5);
+
+        Button loadMore = new Button("Visualizza altri");
+        loadMore.setMaxWidth(Double.MAX_VALUE);
+        loadMore.setStyle("-fx-background-color: linear-gradient(to right, #2563eb, #6366f1); -fx-text-fill: white; -fx-font-weight: bold; -fx-background-radius: 14; -fx-padding: 12 20; -fx-cursor: hand; -fx-font-size: 14px;");
+
+        final int[] page = {1};
+        final boolean[] endReached = {false};
+        loadMore.setOnAction(e -> {
+            if (!endReached[0]) {
+                loadCategoryPage(grid, loadMore, mode, genre, page[0], 30, endReached);
+                page[0]++;
+            }
+        });
+
+        discoverContent.getChildren().addAll(top, grid, loadMore);
+        loadMore.fire();
+    }
+
+    private void loadCategoryPage(TilePane grid, Button loadMore, String mode, String genre, int page, int amount, boolean[] endReached) {
+        statusBar.setText("Caricamento...");
+        loadMore.setDisable(true);
+        loadMore.setText("Caricamento...");
+        Task<List<Anime>> task = new Task<>() {
+            @Override protected List<Anime> call() throws Exception {
+                return client.browse(mode, genre, page, amount);
+            }
+        };
+        task.setOnSucceeded(evt -> {
+            List<Anime> loaded = task.getValue();
+            for (Anime anime : loaded) grid.getChildren().add(createAnimeGridCard(anime));
+            statusBar.setText(loaded.isEmpty() ? "Non ci sono altri anime da caricare." : "Caricati altri " + loaded.size() + " anime.");
+            if (loaded.size() < amount) {
+                endReached[0] = true;
+                loadMore.setText("Fine risultati");
+                loadMore.setDisable(true);
+            } else {
+                loadMore.setText("Visualizza altri");
+                loadMore.setDisable(false);
+            }
+        });
+        task.setOnFailed(evt -> {
+            statusBar.setText("Errore durante il caricamento.");
+            loadMore.setText("Riprova");
+            loadMore.setDisable(false);
+        });
+        executor.submit(task);
     }
 
     private void triggerDebouncedSearch(String query) {
         if (searchDebounceTimer != null) searchDebounceTimer.cancel();
         if (query.length() < 2) {
-            Platform.runLater(() -> searchGrid.getChildren().clear());
+            if (suggestionPopup != null) suggestionPopup.hide();
             return;
         }
         searchDebounceTimer = new Timer();
         searchDebounceTimer.schedule(new TimerTask() {
-            @Override public void run() { Platform.runLater(() -> executeOnlineSearch(query)); }
-        }, 200); 
+            @Override public void run() { Platform.runLater(() -> loadSuggestions(query)); }
+        }, 260);
+    }
+
+    private void loadSuggestions(String query) {
+        Task<List<Anime>> task = new Task<>() {
+            @Override protected List<Anime> call() throws Exception { return client.search(query, 7); }
+        };
+        task.setOnSucceeded(evt -> {
+            suggestionList.getItems().setAll(task.getValue());
+            if (!task.getValue().isEmpty() && searchField.getScene() != null) {
+                Point2D p = searchField.localToScreen(0, searchField.getHeight() + 6);
+                suggestionPopup.show(searchField, p.getX(), p.getY());
+            }
+        });
+        task.setOnFailed(evt -> {
+            if (suggestionPopup != null) suggestionPopup.hide();
+        });
+        executor.submit(task);
     }
 
     private void executeOnlineSearch(String query) {
+        if (query == null || query.isBlank()) return;
         statusBar.setText("Ricerca in corso...");
         Task<List<Anime>> searchTask = new Task<>() {
-            @Override protected List<Anime> call() throws Exception { return client.search(query); }
+            @Override protected List<Anime> call() throws Exception { return client.search(query, 30); }
         };
         searchTask.setOnSucceeded(evt -> {
-            searchGrid.getChildren().clear();
             List<Anime> results = searchTask.getValue();
-            if (results.isEmpty()) {
-                statusBar.setText("Nessun risultato trovato.");
-            } else {
-                statusBar.setText("Trovati " + results.size() + " risultati.");
-                for (Anime a : results) searchGrid.getChildren().add(createAnimeGridCard(a));
-            }
+            displaySearchResults(results, "Risultati per: " + query);
+            statusBar.setText(results.isEmpty() ? "Nessun risultato trovato." : "Trovati " + results.size() + " risultati.");
         });
+        searchTask.setOnFailed(evt -> statusBar.setText("Errore ricerca. Controlla la connessione."));
         executor.submit(searchTask);
+    }
+
+    private void displaySearchResults(List<Anime> results, String title) {
+        discoverContent.getChildren().clear();
+        HBox top = new HBox(12);
+        top.setAlignment(Pos.CENTER_LEFT);
+        Button back = new Button("← Scopri");
+        back.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-background-radius: 12; -fx-padding: 8 14; -fx-cursor: hand;");
+        back.setOnAction(e -> loadDiscoverHome());
+        Label lbl = new Label(title);
+        lbl.setTextFill(Color.WHITE);
+        lbl.setFont(Font.font("Segoe UI", FontWeight.BOLD, 22));
+        top.getChildren().addAll(back, lbl);
+
+        TilePane grid = new TilePane();
+        grid.setHgap(14);
+        grid.setVgap(16);
+        grid.setPrefColumns(5);
+        for (Anime a : results) grid.getChildren().add(createAnimeGridCard(a));
+        if (results.isEmpty()) {
+            Label empty = new Label("Nessun anime trovato.");
+            empty.setTextFill(Color.web("#94a3b8"));
+            empty.setFont(Font.font("Segoe UI", 16));
+            grid.getChildren().add(empty);
+        }
+        discoverContent.getChildren().addAll(top, grid);
     }
 
     // --- 4. IMPOSTAZIONI ---
@@ -418,21 +695,11 @@ public class App extends Application {
         Label lblTheme = new Label("Colore dello Sfondo");
         lblTheme.setTextFill(Color.web("#cbd5e1"));
         lblTheme.setFont(Font.font("Segoe UI", FontWeight.BOLD, 16));
-        
+
         ColorPicker colorPicker = new ColorPicker(Color.web("#0a1128"));
         colorPicker.setStyle("-fx-background-color: #1e293b;");
         colorPicker.setOnAction(e -> root.setBackground(new Background(new BackgroundFill(colorPicker.getValue(), CornerRadii.EMPTY, Insets.EMPTY))));
         sectionTheme.getChildren().addAll(lblTheme, colorPicker);
-
-        VBox sectionSound = new VBox(10);
-        Label lblSound = new Label("Effetti Sonori (UI)");
-        lblSound.setTextFill(Color.web("#cbd5e1"));
-        lblSound.setFont(Font.font("Segoe UI", FontWeight.BOLD, 16));
-        CheckBox soundCheck = new CheckBox("Abilita suoni di interfaccia dinamici");
-        soundCheck.setSelected(true);
-        soundCheck.setTextFill(Color.WHITE);
-        soundCheck.setOnAction(e -> soundEnabled = soundCheck.isSelected());
-        sectionSound.getChildren().addAll(lblSound, soundCheck);
 
         VBox sectionBackup = new VBox(12);
         Label lblBackup = new Label("Backup dei Dati");
@@ -440,16 +707,15 @@ public class App extends Application {
         lblBackup.setFont(Font.font("Segoe UI", FontWeight.BOLD, 16));
 
         Button btnExport = new Button("Esporta Lista");
-        btnExport.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-padding: 8 16; -fx-cursor: hand;");
+        btnExport.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-background-radius: 12; -fx-padding: 9 16; -fx-cursor: hand;");
         btnExport.setOnAction(e -> exportLibraryWithDialog());
 
         Button btnImport = new Button("Importa Lista");
-        btnImport.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-padding: 8 16; -fx-cursor: hand;");
+        btnImport.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-background-radius: 12; -fx-padding: 9 16; -fx-cursor: hand;");
         btnImport.setOnAction(e -> importLibraryWithDialog());
 
         sectionBackup.getChildren().addAll(lblBackup, new HBox(14, btnExport, btnImport));
-
-        settingsPane.getChildren().addAll(title, new Separator(), sectionTheme, new Separator(), sectionSound, new Separator(), sectionBackup);
+        settingsPane.getChildren().addAll(title, new Separator(), sectionTheme, new Separator(), sectionBackup);
     }
 
     private void exportLibraryWithDialog() {
@@ -496,11 +762,11 @@ public class App extends Application {
         // BASE LAYER (Stabile)
         VBox baseLayer = new VBox(8);
         baseLayer.setPadding(new Insets(10));
-        baseLayer.setPrefWidth(165);
-        baseLayer.setMaxWidth(165);
+        baseLayer.setPrefWidth(172);
+        baseLayer.setMaxWidth(172);
 
         Label statusBadge = new Label();
-        statusBadge.setFont(Font.font("Segoe UI", FontWeight.BOLD, 10));
+        statusBadge.setFont(Font.font("Segoe UI", FontWeight.BOLD, 9));
         statusBadge.setPadding(new Insets(3, 6, 3, 6));
         statusBadge.setStyle("-fx-background-radius: 4; -fx-text-fill: white;");
 
@@ -524,14 +790,21 @@ public class App extends Application {
         updateBaseStyle.run();
 
         ImageView poster = new ImageView();
-        poster.setFitWidth(141); poster.setFitHeight(200);
-        if (anime.coverImage != null && !anime.coverImage.isBlank()) poster.setImage(new Image(anime.coverImage, 141, 200, false, true, true));
+        poster.setFitWidth(148); poster.setFitHeight(210);
+        if (anime.coverImage != null && !anime.coverImage.isBlank()) poster.setImage(new Image(anime.coverImage, 148, 210, false, true, true));
 
         Label title = new Label(anime.title != null ? anime.title : "Titolo sconosciuto");
-        title.setTextFill(Color.web("#f1f5f9")); title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
-        title.setWrapText(true); title.setPrefHeight(36);
+        title.setTextFill(Color.web("#f8fafc"));
+        title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 14));
+        title.setWrapText(true);
+        title.setPrefHeight(46);
+        title.setLineSpacing(1.5);
 
-        baseLayer.getChildren().addAll(statusBadge, poster, title);
+        Label smallMeta = new Label(formatValue(anime.format) + "  •  " + formatEpisodes(anime.episodes) + " ep");
+        smallMeta.setTextFill(Color.web("#93a4bd"));
+        smallMeta.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 11));
+
+        baseLayer.getChildren().addAll(statusBadge, poster, title, smallMeta);
         cardRoot.getChildren().add(baseLayer);
 
         // POPUP LATERALE (Accanto alla card)
@@ -540,12 +813,14 @@ public class App extends Application {
         popupContent.setStyle("-fx-background-color: #060b1a; -fx-border-color: #3b82f6; -fx-border-width: 1.5; -fx-background-radius: 10; -fx-border-radius: 10; -fx-padding: 12; -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.6), 10, 0, 0, 0);");
         popupContent.setPrefWidth(170);
 
-        Label hoverInfo = new Label(
-            "Episodi: " + anime.episodes + "\n" +
-            "Durata: " + anime.duration + " min\n\n" +
-            "Generi:\n" + (anime.genres != null ? String.join(", ", anime.genres) : "-")
+        VBox hoverInfo = new VBox(7);
+        hoverInfo.getChildren().addAll(
+            createHoverInfoLine("Tipo", formatValue(anime.format)),
+            createHoverInfoLine("Episodi", formatEpisodes(anime.episodes)),
+            createHoverInfoLine("Durata", formatDuration(anime.duration)),
+            createHoverInfoLine("Anno", formatValue(anime.year)),
+            createHoverInfoLine("Generi", anime.genres != null && !anime.genres.isEmpty() ? String.join(", ", anime.genres) : "N/D")
         );
-        hoverInfo.setTextFill(Color.WHITE); hoverInfo.setFont(Font.font("Segoe UI", 12)); hoverInfo.setWrapText(true);
         
         VBox quickAddMenu = new VBox(5);
         quickAddMenu.setAlignment(Pos.CENTER);
@@ -593,7 +868,6 @@ public class App extends Application {
         ScaleTransition scaleOut = new ScaleTransition(Duration.millis(120), cardRoot); scaleOut.setToX(1.0); scaleOut.setToY(1.0);
 
         cardRoot.setOnMouseEntered(e -> {
-            playHoverSound();
             scaleIn.playFromStart();
             
             if (!sidePopup.isShowing()) {
@@ -617,11 +891,29 @@ public class App extends Application {
 
         cardRoot.setOnMouseClicked(e -> {
             sidePopup.hide();
-            playClickSound();
             showAnimeDetails(anime);
         });
 
         return cardRoot;
+    }
+
+
+
+    private HBox createHoverInfoLine(String key, String value) {
+        HBox row = new HBox(6);
+        row.setAlignment(Pos.TOP_LEFT);
+        Label k = new Label(key + ":");
+        k.setTextFill(Color.web("#93c5fd"));
+        k.setFont(Font.font("Segoe UI", FontWeight.BOLD, 11));
+        k.setMinWidth(52);
+
+        Label v = new Label(value);
+        v.setTextFill(Color.web("#e2e8f0"));
+        v.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 11));
+        v.setWrapText(true);
+        v.setMaxWidth(100);
+        row.getChildren().addAll(k, v);
+        return row;
     }
 
     // --- 6. DETTAGLI MODALI PREMIUM (VOCI PULITE AGGANCIATE SOLO AD ANIME.JAVA) ---
@@ -658,31 +950,41 @@ public class App extends Application {
         infoScroll.setFitToWidth(true);
         infoScroll.setStyle("-fx-background: transparent; -fx-background-color: transparent; -fx-border-color: transparent;");
 
-        statusCombo = new ComboBox<>(FXCollections.observableArrayList("Da vedere", "In visione", "Visti", "Droppato"));
-        statusCombo.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-background-radius: 8; -fx-border-color: #475569;");
-        statusCombo.setOnAction(e -> updateAnimeStatus());
-
-        addButton = new Button("Salva in Lista");
-        addButton.setStyle("-fx-background-color: #10b981; -fx-text-fill: white; -fx-font-weight: bold; -fx-background-radius: 8; -fx-cursor: hand; -fx-padding: 8 16;");
+        addButton = new Button("Aggiungi alla lista");
+        addButton.setMaxWidth(Double.MAX_VALUE);
+        addButton.setMinHeight(46);
+        addButton.setStyle("-fx-background-color: linear-gradient(to right, #10b981, #22c55e); -fx-text-fill: white; -fx-font-weight: bold; -fx-background-radius: 14; -fx-cursor: hand; -fx-padding: 12 18; -fx-font-size: 15px;");
         addButton.setOnAction(e -> addAnimeToLibrary());
 
-        removeButton = new Button("Rimuovi");
-        removeButton.setStyle("-fx-background-color: #ef4444; -fx-text-fill: white; -fx-font-weight: bold; -fx-background-radius: 8; -fx-cursor: hand; -fx-padding: 8 16;");
+        Label statusChoiceLabel = new Label("Imposta stato di visione");
+        statusChoiceLabel.setTextFill(Color.web("#cbd5e1"));
+        statusChoiceLabel.setFont(Font.font("Segoe UI", FontWeight.BOLD, 13));
+
+        detailPlanButton = createStatusChip("Da vedere", Anime.Status.TO_WATCH);
+        detailWatchingButton = createStatusChip("In visione", Anime.Status.WATCHING);
+        detailWatchedButton = createStatusChip("Visto", Anime.Status.WATCHED);
+        detailDroppedButton = createStatusChip("Droppato", Anime.Status.DROPPED);
+        FlowPane statusButtonsBox = new FlowPane(8, 8, detailPlanButton, detailWatchingButton, detailWatchedButton, detailDroppedButton);
+        statusButtonsBox.setAlignment(Pos.CENTER_LEFT);
+
+        removeButton = new Button("Rimuovi dalla lista");
+        removeButton.setStyle("-fx-background-color: rgba(239,68,68,0.16); -fx-text-fill: #fca5a5; -fx-font-weight: bold; -fx-background-radius: 12; -fx-border-radius: 12; -fx-border-color: rgba(248,113,113,0.45); -fx-cursor: hand; -fx-padding: 9 14;");
         removeButton.setOnAction(e -> removeAnimeFromLibrary());
 
         Button closeBtn = new Button("Chiudi");
-        closeBtn.setStyle("-fx-background-color: #475569; -fx-text-fill: white; -fx-background-radius: 8; -fx-cursor: hand; -fx-padding: 8 16;");
+        closeBtn.setStyle("-fx-background-color: #334155; -fx-text-fill: white; -fx-background-radius: 12; -fx-cursor: hand; -fx-padding: 9 14; -fx-font-weight: bold;");
         closeBtn.setOnAction(e -> {
             detailOverlay.setVisible(false);
             refreshLibraryGrid();
             updateDashboardStats();
         });
 
-        HBox actionsRow = new HBox(12, statusCombo, addButton, removeButton, closeBtn);
-        actionsRow.setAlignment(Pos.CENTER_LEFT);
-        actionsRow.setPadding(new Insets(10, 0, 0, 0));
+        HBox bottomActions = new HBox(10, removeButton, closeBtn);
+        bottomActions.setAlignment(Pos.CENTER_LEFT);
+        VBox actionsBox = new VBox(10, addButton, statusChoiceLabel, statusButtonsBox, bottomActions);
+        actionsBox.setPadding(new Insets(8, 0, 0, 0));
 
-        contentSide.getChildren().addAll(titleLabel, metaLabel, infoScroll, actionsRow);
+        contentSide.getChildren().addAll(titleLabel, metaLabel, infoScroll, actionsBox);
         dialogBox.getChildren().addAll(coverView, contentSide);
         detailOverlay.getChildren().add(dialogBox);
     }
@@ -692,22 +994,19 @@ public class App extends Application {
         Anime local = manager.all().stream().filter(x -> x.id == anime.id).findFirst().orElse(null);
         boolean exists = (local != null);
         activeAnime = exists ? local : anime;
+        if (hasMissingImportantInfo(activeAnime)) {
+            enrichAnimeDetailsAsync(activeAnime.id);
+        }
 
         titleLabel.setText(activeAnime.title != null ? activeAnime.title : "Sconosciuto");
-        metaLabel.setText("STATO NELLA TUA LISTA: " + activeAnime.statusToString().toUpperCase());
+        metaLabel.setText(exists ? "STATO NELLA TUA LISTA: " + activeAnime.statusToString().toUpperCase() : "NON ANCORA SALVATO NELLA TUA LISTA");
         
-        // Struttura Premium pulita: mostra ESATTAMENTE i dati reali del tuo file Anime.java
-        extendedInfoBox.getChildren().clear();
-        extendedInfoBox.getChildren().addAll(
-            createInfoDetailRow("Numero Episodi", String.valueOf(activeAnime.episodes)),
-            createInfoDetailRow("Durata Singolo Episodio", activeAnime.duration + " min"),
-            createInfoDetailRow("Tempo di Visione Totale", String.format("%.1f ore", activeAnime.totalHours())),
-            createGenresTagRow(activeAnime.genres)
-        );
-
-        statusCombo.setValue(activeAnime.statusToString());
-        addButton.setDisable(exists);
-        removeButton.setDisable(!exists);
+        renderActiveAnimeInfo();
+        updateDetailStatusButtons();
+        addButton.setVisible(!exists);
+        addButton.setManaged(!exists);
+        removeButton.setVisible(exists);
+        removeButton.setManaged(exists);
 
         if (activeAnime.coverImage != null && !activeAnime.coverImage.isBlank()) {
             coverView.setImage(new Image(activeAnime.coverImage, 240, 360, true, true, true));
@@ -718,6 +1017,67 @@ public class App extends Application {
         detailOverlay.setVisible(true);
         FadeTransition ft = new FadeTransition(Duration.millis(200), detailOverlay);
         ft.setFromValue(0.0); ft.setToValue(1.0); ft.play();
+    }
+
+
+    private boolean hasMissingImportantInfo(Anime anime) {
+        if (anime == null) return false;
+        return anime.episodes <= 0 || anime.duration <= 0 || isEmptyInfo(anime.format) || isEmptyInfo(anime.airingStatus)
+                || isEmptyInfo(anime.year) || isEmptyInfo(anime.season) || isEmptyInfo(anime.studio);
+    }
+
+    private boolean isEmptyInfo(String value) {
+        return value == null || value.isBlank() || value.equalsIgnoreCase("N/D") || value.equalsIgnoreCase("UNKNOWN");
+    }
+
+    private void enrichAnimeDetailsAsync(int animeId) {
+        Task<Anime> task = new Task<>() {
+            @Override protected Anime call() throws Exception {
+                return client.getAnimeById(animeId);
+            }
+        };
+        task.setOnSucceeded(evt -> {
+            Anime fresh = task.getValue();
+            if (fresh == null || activeAnime == null || activeAnime.id != fresh.id) return;
+            Anime.Status oldStatus = activeAnime.status;
+            copyOnlineInfo(fresh, activeAnime);
+            activeAnime.status = oldStatus;
+            renderActiveAnimeInfo();
+        });
+        executor.submit(task);
+    }
+
+    private void copyOnlineInfo(Anime from, Anime to) {
+        to.title = from.title;
+        to.coverImage = from.coverImage;
+        to.episodes = from.episodes;
+        to.duration = from.duration;
+        to.genres = from.genres;
+        to.format = from.format;
+        to.airingStatus = from.airingStatus;
+        to.year = from.year;
+        to.season = from.season;
+        to.studio = from.studio;
+    }
+
+    private void renderActiveAnimeInfo() {
+        if (activeAnime == null) return;
+        titleLabel.setText(activeAnime.title != null ? activeAnime.title : "Sconosciuto");
+        extendedInfoBox.getChildren().clear();
+        extendedInfoBox.getChildren().addAll(
+            createInfoDetailRow("Tipo", formatValue(activeAnime.format)),
+            createInfoDetailRow("Episodi", formatEpisodes(activeAnime.episodes)),
+            createInfoDetailRow("Durata episodio", formatDuration(activeAnime.duration)),
+            createInfoDetailRow("Stato", formatValue(activeAnime.airingStatus)),
+            createInfoDetailRow("Anno", formatValue(activeAnime.year)),
+            createInfoDetailRow("Stagione", formatValue(activeAnime.season)),
+            createInfoDetailRow("Studio", formatValue(activeAnime.studio)),
+            createInfoDetailRow("Tempo totale", String.format("%.1f ore", activeAnime.totalHours())),
+            createGenresTagRow(activeAnime.genres)
+        );
+        if (activeAnime.coverImage != null && !activeAnime.coverImage.isBlank()) {
+            coverView.setImage(new Image(activeAnime.coverImage, 240, 360, true, true, true));
+        }
     }
 
     private HBox createInfoDetailRow(String label, String value) {
@@ -767,7 +1127,7 @@ public class App extends Application {
 
     private void addAnimeToLibrary() {
         if (activeAnime == null) return;
-        activeAnime.status = Anime.fromStringLocalized(statusCombo.getValue());
+        // lo stato viene scelto dai pulsanti moderni
         manager.add(activeAnime);
         saveLibraryData("Salvato in lista.");
         addButton.setDisable(true); removeButton.setDisable(false);
@@ -782,15 +1142,60 @@ public class App extends Application {
         showAnimeDetails(activeAnime);
     }
 
-    private void updateAnimeStatus() {
-        if (activeAnime == null || statusCombo.getValue() == null) return;
-        Anime.Status newStatus = Anime.fromStringLocalized(statusCombo.getValue());
+    private Button createStatusChip(String text, Anime.Status status) {
+        Button btn = new Button(text);
+        btn.setMinWidth(112);
+        btn.setMinHeight(36);
+        btn.setStyle("-fx-background-color: #1e293b; -fx-text-fill: #cbd5e1; -fx-background-radius: 14; -fx-border-radius: 14; -fx-border-color: #334155; -fx-border-width: 1; -fx-padding: 8 13; -fx-font-weight: bold; -fx-font-size: 12px; -fx-cursor: hand;");
+        btn.setOnAction(e -> setActiveAnimeStatus(status));
+        return btn;
+    }
+
+    private void setActiveAnimeStatus(Anime.Status status) {
+        if (activeAnime == null) return;
+        activeAnime.status = status;
         if (manager.all().stream().anyMatch(x -> x.id == activeAnime.id)) {
-            activeAnime.status = newStatus;
-            manager.updateStatus(activeAnime.id, newStatus);
+            manager.updateStatus(activeAnime.id, status);
             saveLibraryData("Stato modificato.");
-            showAnimeDetails(activeAnime);
+        } else {
+            manager.add(activeAnime);
+            saveLibraryData("Aggiunto alla lista.");
+            addButton.setVisible(false);
+            addButton.setManaged(false);
+            removeButton.setVisible(true);
+            removeButton.setManaged(true);
         }
+        metaLabel.setText("STATO NELLA TUA LISTA: " + activeAnime.statusToString().toUpperCase());
+        updateDetailStatusButtons();
+    }
+
+    private void updateDetailStatusButtons() {
+        if (activeAnime == null) return;
+        styleStatusChip(detailPlanButton, activeAnime.status == Anime.Status.TO_WATCH, "#3b82f6");
+        styleStatusChip(detailWatchingButton, activeAnime.status == Anime.Status.WATCHING, "#ff9f43");
+        styleStatusChip(detailWatchedButton, activeAnime.status == Anime.Status.WATCHED, "#1dd1a1");
+        styleStatusChip(detailDroppedButton, activeAnime.status == Anime.Status.DROPPED, "#ff6b6b");
+    }
+
+    private void styleStatusChip(Button btn, boolean selected, String color) {
+        if (btn == null) return;
+        if (selected) {
+            btn.setStyle("-fx-background-color: " + color + "; -fx-text-fill: white; -fx-background-radius: 14; -fx-border-radius: 14; -fx-border-color: rgba(255,255,255,0.35); -fx-border-width: 1; -fx-padding: 8 13; -fx-font-weight: bold; -fx-font-size: 12px; -fx-cursor: hand;");
+        } else {
+            btn.setStyle("-fx-background-color: #1e293b; -fx-text-fill: #cbd5e1; -fx-background-radius: 14; -fx-border-radius: 14; -fx-border-color: #334155; -fx-border-width: 1; -fx-padding: 8 13; -fx-font-weight: bold; -fx-font-size: 12px; -fx-cursor: hand;");
+        }
+    }
+
+    private String formatValue(String value) {
+        return value == null || value.isBlank() || value.equalsIgnoreCase("UNKNOWN") ? "N/D" : value;
+    }
+
+    private String formatEpisodes(int episodes) {
+        return episodes <= 0 ? "??" : String.valueOf(episodes);
+    }
+
+    private String formatDuration(int duration) {
+        return duration <= 0 ? "N/D" : duration + " min";
     }
 
     // --- CARICAMENTO DATI ---
