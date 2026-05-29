@@ -1,7 +1,12 @@
 package com.myanimedesk;
 
 import javafx.animation.FadeTransition;
+import javafx.animation.PauseTransition;
 import javafx.animation.ScaleTransition;
+import javafx.animation.Timeline;
+import javafx.animation.KeyFrame;
+import javafx.animation.KeyValue;
+import javafx.animation.Interpolator;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -10,6 +15,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
@@ -23,20 +29,62 @@ import javafx.stage.Popup;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 
+import java.awt.Desktop;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Path;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 public class App extends Application {
+    private static final String APP_VERSION = "0.3.8";
+    private static final String RELEASES_URL = "https://github.com/DasCrishpp/MyAnimeDesk/releases";
+    private static final String LATEST_RELEASE_API = "https://api.github.com/repos/DasCrishpp/MyAnimeDesk/releases/latest";
+    private static final Path APP_DIR = Path.of(System.getProperty("user.home"), ".myanimedesk");
+    private static final Path SETTINGS_FILE = APP_DIR.resolve("app.properties");
+    private static final String CURRENT_CHANGELOG = """
+- Aggiunto il controllo aggiornamenti all'avvio e nelle impostazioni
+- Aggiunta la versione attuale dell'app nelle impostazioni
+- Aggiunto il popup del changelog al primo avvio dopo l'aggiornamento
+- Aggiunto il supporto per uno sfondo personalizzato
+- Aggiunta l'opzione per ripristinare lo sfondo predefinito
+- Migliorato il design della sidebar con pulsanti arrotondati
+- Migliorata la disposizione e la leggibilità delle card degli anime
+- Aggiunte animazioni più fluide nell'interfaccia
+- Migliorata la navigazione orizzontale nelle sezioni Scopri
+- Aggiunte categorie in Scopri: Popolari, Romance, Azione, Isekai, Drama, Slice of Life, Shonen, Mystery, Horror e Comedy
+- Aggiunto il supporto a Vedi tutto e Visualizza altri nelle categorie Scopri
+- Migliorati i suggerimenti di ricerca con copertina e informazioni dell'anime
+- Risolto il problema della tendina di ricerca che rimaneva aperta dopo la selezione di un anime
+- Aggiunte più informazioni sugli anime: tipo, episodi, durata, stato, anno, stagione e studio
+- Migliorata la schermata dei dettagli anime
+- Migliorati i pulsanti dello stato di visione nei dettagli anime
+- Migliorata la visibilità del pulsante Aggiungi alla lista
+- Corretto il calcolo del tempo totale di visione: ora conta solo gli anime completati
+- Risolto il problema della rimozione degli anime dalla lista
+- Risolto il problema dello stato degli anime che non si aggiornava correttamente dopo le modifiche
+- Aggiunto un pulsante per aggiornare manualmente la GUI
+- Aggiunta l'opzione per cancellare tutta la lista con conferma
+- Migliorato lo stile della barra di scorrimento
+- Risolti problemi di sovrapposizione dei popup delle card
+- Migliorata la stabilità della sezione Scopri/Ricerca
+- Rimosso il filtro Hentai/18+ a causa di vari problemi
+""";
+
     private final AniListClient client = new AniListClient();
     private final AnimeListManager manager = new AnimeListManager();
     private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -47,9 +95,14 @@ public class App extends Application {
     
     private TilePane libraryGrid, searchGrid;
     private VBox discoverContent;
+    private ScrollPane discoverScrollPane;
     private Popup suggestionPopup;
     private ListView<Anime> suggestionList;
+    private boolean suppressSuggestionPopupUpdate = false;
+    private Popup activeCardPopup;
     private HBox dashboardWatchingRow;
+    private Button floatingDiscoverButton;
+    private Button floatingTopButton;
 
     private Label totalHoursLabel, watchingCountLabel, completedCountLabel;
     private TextField searchField;
@@ -88,7 +141,8 @@ public class App extends Application {
         stage.setMinHeight(780);
 
         root = new BorderPane();
-        root.setBackground(new Background(new BackgroundFill(Color.web("#0a1128"), CornerRadii.EMPTY, Insets.EMPTY)));
+        applySolidBackground(Color.web("#0a1128"));
+        applySavedSettings();
 
         root.setLeft(createSidebar());
 
@@ -116,6 +170,11 @@ public class App extends Application {
         if(firstBtn instanceof Button) {
             ((Button) firstBtn).fire();
         }
+
+        Platform.runLater(() -> {
+            showChangelogIfFirstRunOfVersion();
+            checkForUpdates(false);
+        });
     }
 
     // --- SUONI UI DISATTIVATI ---
@@ -186,13 +245,29 @@ public class App extends Application {
     }
 
     private void showView(VBox targetPane) {
+        hideSuggestionPopupCompletely();
+        hideActiveCardPopup();
         VBox[] panes = {dashboardPane, libraryPane, searchPane, settingsPane};
         for (VBox p : panes) {
             if (p == targetPane) {
                 p.setVisible(true);
-                FadeTransition ft = new FadeTransition(Duration.millis(300), p);
-                ft.setFromValue(0.2); ft.setToValue(1.0); ft.play();
-            } else { p.setVisible(false); }
+                p.setOpacity(0.0);
+                p.setTranslateY(12);
+
+                FadeTransition fade = new FadeTransition(Duration.millis(240), p);
+                fade.setFromValue(0.0);
+                fade.setToValue(1.0);
+
+                Timeline slide = new Timeline(
+                    new KeyFrame(Duration.millis(240),
+                        new KeyValue(p.translateYProperty(), 0, Interpolator.EASE_OUT)
+                    )
+                );
+                fade.play();
+                slide.play();
+            } else {
+                p.setVisible(false);
+            }
         }
         detailOverlay.setVisible(false);
     }
@@ -203,24 +278,41 @@ public class App extends Application {
             String css = """
                 .scroll-pane { -fx-background-color: transparent; -fx-background: transparent; }
                 .scroll-pane > .viewport { -fx-background-color: transparent; }
-                .scroll-bar:vertical, .scroll-bar:horizontal {
+
+                .scroll-bar:vertical {
                     -fx-background-color: transparent;
-                    -fx-padding: 2;
+                    -fx-pref-width: 9;
+                    -fx-padding: 2 2 2 2;
                 }
-                .scroll-bar .track { -fx-background-color: transparent; }
+                .scroll-bar:horizontal {
+                    -fx-background-color: transparent;
+                    -fx-pref-height: 9;
+                    -fx-padding: 2 2 2 2;
+                }
+                .scroll-bar .track, .scroll-bar .track-background {
+                    -fx-background-color: transparent;
+                    -fx-border-color: transparent;
+                    -fx-background-insets: 0;
+                    -fx-opacity: 0;
+                }
                 .scroll-bar .thumb {
-                    -fx-background-color: rgba(71, 85, 105, 0.55);
+                    -fx-background-color: rgba(148, 163, 184, 0.42);
                     -fx-background-radius: 999;
                 }
-                .scroll-bar .thumb:hover { -fx-background-color: rgba(96, 165, 250, 0.75); }
+                .scroll-bar .thumb:hover {
+                    -fx-background-color: rgba(96, 165, 250, 0.78);
+                }
                 .scroll-bar .increment-button, .scroll-bar .decrement-button {
                     -fx-background-color: transparent;
                     -fx-padding: 0;
+                    -fx-opacity: 0;
                 }
                 .scroll-bar .increment-arrow, .scroll-bar .decrement-arrow {
                     -fx-shape: "";
                     -fx-padding: 0;
+                    -fx-opacity: 0;
                 }
+
                 .list-view, .list-cell { -fx-background-color: transparent; }
                 .list-cell:filled:hover { -fx-background-color: rgba(30, 41, 59, 0.95); -fx-background-radius: 10; }
                 .list-cell:filled:selected { -fx-background-color: rgba(37, 99, 235, 0.32); -fx-background-radius: 10; }
@@ -276,7 +368,7 @@ public class App extends Application {
     }
 
     private void updateDashboardStats() {
-        double hours = manager.all().stream().mapToDouble(Anime::totalHours).sum();
+        double hours = getByStatus(Anime.Status.WATCHED).stream().mapToDouble(Anime::totalHours).sum();
         totalHoursLabel.setText(String.format("%.1f ore", hours));
         watchingCountLabel.setText(String.valueOf(getByStatus(Anime.Status.WATCHING).size()));
         completedCountLabel.setText(String.valueOf(getByStatus(Anime.Status.WATCHED).size()));
@@ -386,11 +478,37 @@ public class App extends Application {
         discoverContent = new VBox(24);
         discoverContent.setPadding(new Insets(4, 0, 22, 0));
 
-        ScrollPane scrollPane = new ScrollPane(discoverContent);
-        scrollPane.setFitToWidth(true);
-        scrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent; -fx-border-color: transparent;");
+        discoverScrollPane = new ScrollPane(discoverContent);
+        discoverScrollPane.setFitToWidth(true);
+        discoverScrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        discoverScrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        discoverScrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent; -fx-border-color: transparent;");
 
-        searchPane.getChildren().addAll(title, searchField, scrollPane);
+        floatingDiscoverButton = createFloatingActionButton("← Scopri");
+        floatingDiscoverButton.setOnAction(e -> loadDiscoverHome());
+        floatingTopButton = createFloatingActionButton("↑ Su");
+        floatingTopButton.setOnAction(e -> scrollDiscoverToTop());
+        floatingDiscoverButton.setVisible(false);
+        floatingDiscoverButton.setManaged(false);
+        floatingTopButton.setVisible(false);
+        floatingTopButton.setManaged(false);
+
+        HBox floatingBar = new HBox(8, floatingDiscoverButton, floatingTopButton);
+        floatingBar.setAlignment(Pos.TOP_LEFT);
+        floatingBar.setPadding(new Insets(10, 0, 0, 10));
+        // IMPORTANTE: in uno StackPane un HBox può allargarsi e coprire tutta la sezione.
+        // Se prende gli eventi del mouse, Scopri sembra “freezata”: non scorri e non clicchi le card.
+        // Così il contenitore resta grande solo quanto i pulsanti e non blocca la UI sotto.
+        floatingBar.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+        floatingBar.setPickOnBounds(false);
+        floatingBar.setMouseTransparent(false);
+
+        StackPane discoverWrapper = new StackPane(discoverScrollPane, floatingBar);
+        discoverWrapper.setPickOnBounds(false);
+        StackPane.setAlignment(floatingBar, Pos.TOP_LEFT);
+        VBox.setVgrow(discoverWrapper, Priority.ALWAYS);
+
+        searchPane.getChildren().addAll(title, searchField, discoverWrapper);
         loadDiscoverHome();
     }
 
@@ -460,10 +578,16 @@ public class App extends Application {
         suggestionList.setOnMouseClicked(e -> {
             Anime selected = suggestionList.getSelectionModel().getSelectedItem();
             if (selected != null) {
-                suggestionPopup.hide();
+                hideSuggestionPopupCompletely();
+
+                suppressSuggestionPopupUpdate = true;
                 searchField.setText(selected.title);
+                searchField.getParent().requestFocus();
+                suppressSuggestionPopupUpdate = false;
+
                 displaySearchResults(List.of(selected), "Risultato selezionato");
                 showAnimeDetails(selected);
+                e.consume();
             }
         });
 
@@ -471,7 +595,7 @@ public class App extends Application {
         showAll.setMaxWidth(Double.MAX_VALUE);
         showAll.setStyle("-fx-background-color: linear-gradient(to right, #2563eb, #6366f1); -fx-text-fill: white; -fx-font-weight: bold; -fx-background-radius: 12; -fx-padding: 11 14; -fx-cursor: hand; -fx-font-size: 13px;");
         showAll.setOnAction(e -> {
-            suggestionPopup.hide();
+            hideSuggestionPopupCompletely();
             executeOnlineSearch(searchField.getText().trim());
         });
 
@@ -479,22 +603,75 @@ public class App extends Application {
         suggestionPopup.getContent().add(box);
     }
 
+    private void hideSuggestionPopupCompletely() {
+        if (searchDebounceTimer != null) {
+            searchDebounceTimer.cancel();
+            searchDebounceTimer = null;
+        }
+        if (suggestionPopup != null) suggestionPopup.hide();
+        if (suggestionList != null) suggestionList.getItems().clear();
+    }
+
+    private void hideActiveCardPopup() {
+        if (activeCardPopup != null) {
+            activeCardPopup.hide();
+            activeCardPopup = null;
+        }
+    }
+
+
+    private Button createFloatingActionButton(String text) {
+        Button btn = new Button(text);
+        btn.setStyle("-fx-background-color: rgba(15,23,42,0.82); -fx-text-fill: #dbeafe; -fx-font-weight: bold; -fx-background-radius: 999; -fx-border-radius: 999; -fx-border-color: rgba(147,197,253,0.35); -fx-padding: 8 14; -fx-cursor: hand; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.35), 14, 0.18, 0, 4);");
+        btn.setOnMouseEntered(e -> {
+            btn.setStyle("-fx-background-color: rgba(37,99,235,0.90); -fx-text-fill: white; -fx-font-weight: bold; -fx-background-radius: 999; -fx-border-radius: 999; -fx-border-color: rgba(147,197,253,0.65); -fx-padding: 8 14; -fx-cursor: hand; -fx-effect: dropshadow(gaussian, rgba(59,130,246,0.40), 18, 0.25, 0, 5);");
+            ScaleTransition st = new ScaleTransition(Duration.millis(120), btn);
+            st.setToX(1.04); st.setToY(1.04); st.play();
+        });
+        btn.setOnMouseExited(e -> {
+            btn.setStyle("-fx-background-color: rgba(15,23,42,0.82); -fx-text-fill: #dbeafe; -fx-font-weight: bold; -fx-background-radius: 999; -fx-border-radius: 999; -fx-border-color: rgba(147,197,253,0.35); -fx-padding: 8 14; -fx-cursor: hand; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.35), 14, 0.18, 0, 4);");
+            ScaleTransition st = new ScaleTransition(Duration.millis(120), btn);
+            st.setToX(1.0); st.setToY(1.0); st.play();
+        });
+        return btn;
+    }
+
+    private void setFloatingDiscoverControls(boolean showDiscover, boolean showTop) {
+        if (floatingDiscoverButton != null) {
+            floatingDiscoverButton.setVisible(showDiscover);
+            floatingDiscoverButton.setManaged(showDiscover);
+        }
+        if (floatingTopButton != null) {
+            floatingTopButton.setVisible(showTop);
+            floatingTopButton.setManaged(showTop);
+        }
+    }
+
     private void loadDiscoverHome() {
+        hideSuggestionPopupCompletely();
+        hideActiveCardPopup();
+        setFloatingDiscoverControls(false, false);
         discoverContent.getChildren().clear();
         discoverContent.getChildren().addAll(
             createAnimeRowSection("Popolari", "POPULAR", null),
             createAnimeRowSection("Nuove uscite", "RECENT", null),
             createAnimeRowSection("Romance", "GENRE", "Romance"),
             createAnimeRowSection("Azione", "GENRE", "Action"),
+            createAnimeRowSection("Comedy", "GENRE", "Comedy"),
+            createAnimeRowSection("Mystery", "GENRE", "Mystery"),
+            createAnimeRowSection("Horror", "GENRE", "Horror"),
             createAnimeRowSection("Isekai", "TAG", "Isekai"),
+            createAnimeRowSection("Ecchi", "TAG", "Ecchi"),
             createAnimeRowSection("Drama", "GENRE", "Drama"),
             createAnimeRowSection("Slice of Life", "GENRE", "Slice of Life"),
             createAnimeRowSection("Shōnen", "TAG", "Shounen")
         );
+        scrollDiscoverToTop();
     }
 
     private VBox createAnimeRowSection(String title, String mode, String genre) {
         VBox section = new VBox(10);
+
         HBox header = new HBox(10);
         header.setAlignment(Pos.CENTER_LEFT);
 
@@ -505,51 +682,74 @@ public class App extends Application {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
+        Button left = createRoundNavButton("‹");
+        Button right = createRoundNavButton("›");
+
         Button seeAll = new Button("Vedi tutto");
         seeAll.setStyle("-fx-background-color: rgba(37,99,235,0.18); -fx-text-fill: #93c5fd; -fx-font-weight: bold; -fx-background-radius: 14; -fx-padding: 7 14; -fx-cursor: hand;");
         seeAll.setOnAction(e -> loadFullCategory(title, mode, genre));
 
-        header.getChildren().addAll(lbl, spacer, seeAll);
+        header.getChildren().addAll(lbl, spacer, left, right, seeAll);
 
-        HBox row = new HBox(12);
+        HBox row = new HBox(8);
         row.setPadding(new Insets(4, 0, 10, 0));
 
         ScrollPane rowScroll = new ScrollPane(row);
         rowScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         rowScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         rowScroll.setFitToHeight(true);
-        rowScroll.setPannable(true);
+        rowScroll.setPannable(false);
         rowScroll.setStyle("-fx-background: transparent; -fx-background-color: transparent; -fx-border-color: transparent;");
 
-        final int[] page = {1};
-        final boolean[] loading = {false};
-        Runnable loadMore = () -> {
-            if (loading[0]) return;
-            loading[0] = true;
-            Task<List<Anime>> task = new Task<>() {
-                @Override protected List<Anime> call() throws Exception {
-                    return client.browse(mode, genre, page[0], 14);
-                }
-            };
-            task.setOnSucceeded(evt -> {
-                for (Anime anime : task.getValue()) row.getChildren().add(createAnimeGridCard(anime));
-                page[0]++;
-                loading[0] = false;
-            });
-            task.setOnFailed(evt -> loading[0] = false);
-            executor.submit(task);
+        left.setOnAction(e -> smoothHorizontalScroll(rowScroll, Math.max(0, rowScroll.getHvalue() - 0.34)));
+        right.setOnAction(e -> smoothHorizontalScroll(rowScroll, Math.min(1, rowScroll.getHvalue() + 0.34)));
+
+        Label loading = new Label("Caricamento...");
+        loading.setTextFill(Color.web("#94a3b8"));
+        row.getChildren().add(loading);
+
+        Task<List<Anime>> task = new Task<>() {
+            @Override protected List<Anime> call() throws Exception {
+                return client.browse(mode, genre, 1, 30);
+            }
         };
-        loadMore.run();
-        rowScroll.hvalueProperty().addListener((obs, oldVal, newVal) -> {
-            if (newVal.doubleValue() > 0.88) loadMore.run();
+        task.setOnSucceeded(evt -> {
+            row.getChildren().clear();
+            for (Anime anime : task.getValue()) row.getChildren().add(createAnimeGridCard(anime));
+            if (task.getValue().isEmpty()) {
+                Label empty = new Label("Nessun risultato.");
+                empty.setTextFill(Color.web("#94a3b8"));
+                row.getChildren().add(empty);
+            }
         });
+        task.setOnFailed(evt -> {
+            row.getChildren().clear();
+            Label err = new Label("Errore caricamento.");
+            err.setTextFill(Color.web("#fca5a5"));
+            row.getChildren().add(err);
+        });
+        executor.submit(task);
 
         section.getChildren().addAll(header, rowScroll);
         return section;
     }
 
+    private Button createRoundNavButton(String text) {
+        Button btn = new Button(text);
+        btn.setMinSize(34, 30);
+        btn.setPrefSize(34, 30);
+        btn.setStyle("-fx-background-color: rgba(15,23,42,0.92); -fx-text-fill: #e2e8f0; -fx-font-size: 18px; -fx-font-weight: bold; -fx-background-radius: 999; -fx-border-radius: 999; -fx-border-color: rgba(148,163,184,0.24); -fx-cursor: hand; -fx-padding: 0;");
+        btn.setOnMouseEntered(e -> btn.setStyle("-fx-background-color: rgba(37,99,235,0.38); -fx-text-fill: white; -fx-font-size: 18px; -fx-font-weight: bold; -fx-background-radius: 999; -fx-border-radius: 999; -fx-border-color: rgba(147,197,253,0.55); -fx-cursor: hand; -fx-padding: 0;"));
+        btn.setOnMouseExited(e -> btn.setStyle("-fx-background-color: rgba(15,23,42,0.92); -fx-text-fill: #e2e8f0; -fx-font-size: 18px; -fx-font-weight: bold; -fx-background-radius: 999; -fx-border-radius: 999; -fx-border-color: rgba(148,163,184,0.24); -fx-cursor: hand; -fx-padding: 0;"));
+        return btn;
+    }
+
     private void loadFullCategory(String title, String mode, String genre) {
+        if (suggestionPopup != null) suggestionPopup.hide();
+        hideActiveCardPopup();
+        setFloatingDiscoverControls(true, false);
         discoverContent.getChildren().clear();
+        scrollDiscoverToTop();
         HBox top = new HBox(12);
         top.setAlignment(Pos.CENTER_LEFT);
         Button back = new Button("← Indietro");
@@ -558,16 +758,22 @@ public class App extends Application {
         Label lbl = new Label(title);
         lbl.setTextFill(Color.WHITE);
         lbl.setFont(Font.font("Segoe UI", FontWeight.BOLD, 22));
-        top.getChildren().addAll(back, lbl);
+        Button topButton = createBackToTopButton();
+        topButton.setVisible(false);
+        topButton.setManaged(false);
+        Region topSpacer = new Region();
+        HBox.setHgrow(topSpacer, Priority.ALWAYS);
+        top.getChildren().addAll(back, lbl, topSpacer, topButton);
 
         TilePane grid = new TilePane();
-        grid.setHgap(14);
-        grid.setVgap(16);
+        grid.setHgap(18);
+        grid.setVgap(20);
         grid.setPrefColumns(5);
 
         Button loadMore = new Button("Visualizza altri");
         loadMore.setMaxWidth(Double.MAX_VALUE);
         loadMore.setStyle("-fx-background-color: linear-gradient(to right, #2563eb, #6366f1); -fx-text-fill: white; -fx-font-weight: bold; -fx-background-radius: 14; -fx-padding: 12 20; -fx-cursor: hand; -fx-font-size: 14px;");
+        loadMore.setUserData(topButton);
 
         final int[] page = {1};
         final boolean[] endReached = {false};
@@ -594,6 +800,12 @@ public class App extends Application {
         task.setOnSucceeded(evt -> {
             List<Anime> loaded = task.getValue();
             for (Anime anime : loaded) grid.getChildren().add(createAnimeGridCard(anime));
+            if (loadMore.getUserData() instanceof Button topBtn) {
+                boolean showTop = grid.getChildren().size() >= 29;
+                topBtn.setVisible(showTop);
+                topBtn.setManaged(showTop);
+                setFloatingDiscoverControls(true, showTop);
+            }
             statusBar.setText(loaded.isEmpty() ? "Non ci sono altri anime da caricare." : "Caricati altri " + loaded.size() + " anime.");
             if (loaded.size() < amount) {
                 endReached[0] = true;
@@ -614,10 +826,17 @@ public class App extends Application {
 
     private void triggerDebouncedSearch(String query) {
         if (searchDebounceTimer != null) searchDebounceTimer.cancel();
-        if (query.length() < 2) {
-            if (suggestionPopup != null) suggestionPopup.hide();
+
+        if (suppressSuggestionPopupUpdate) {
+            hideSuggestionPopupCompletely();
             return;
         }
+
+        if (query.length() < 2) {
+            hideSuggestionPopupCompletely();
+            return;
+        }
+
         searchDebounceTimer = new Timer();
         searchDebounceTimer.schedule(new TimerTask() {
             @Override public void run() { Platform.runLater(() -> loadSuggestions(query)); }
@@ -629,20 +848,32 @@ public class App extends Application {
             @Override protected List<Anime> call() throws Exception { return client.search(query, 7); }
         };
         task.setOnSucceeded(evt -> {
+            if (suppressSuggestionPopupUpdate || searchField == null || !searchField.isFocused()) {
+                hideSuggestionPopupCompletely();
+                return;
+            }
+
             suggestionList.getItems().setAll(task.getValue());
             if (!task.getValue().isEmpty() && searchField.getScene() != null) {
                 Point2D p = searchField.localToScreen(0, searchField.getHeight() + 6);
-                suggestionPopup.show(searchField, p.getX(), p.getY());
+                if (!suggestionPopup.isShowing()) {
+                    suggestionPopup.show(searchField, p.getX(), p.getY());
+                } else {
+                    suggestionPopup.setX(p.getX());
+                    suggestionPopup.setY(p.getY());
+                }
+            } else {
+                hideSuggestionPopupCompletely();
             }
         });
-        task.setOnFailed(evt -> {
-            if (suggestionPopup != null) suggestionPopup.hide();
-        });
+        task.setOnFailed(evt -> hideSuggestionPopupCompletely());
         executor.submit(task);
     }
 
     private void executeOnlineSearch(String query) {
         if (query == null || query.isBlank()) return;
+        hideSuggestionPopupCompletely();
+        hideActiveCardPopup();
         statusBar.setText("Ricerca in corso...");
         Task<List<Anime>> searchTask = new Task<>() {
             @Override protected List<Anime> call() throws Exception { return client.search(query, 30); }
@@ -657,7 +888,11 @@ public class App extends Application {
     }
 
     private void displaySearchResults(List<Anime> results, String title) {
+        hideSuggestionPopupCompletely();
+        hideActiveCardPopup();
+        setFloatingDiscoverControls(true, results != null && results.size() >= 29);
         discoverContent.getChildren().clear();
+        scrollDiscoverToTop();
         HBox top = new HBox(12);
         top.setAlignment(Pos.CENTER_LEFT);
         Button back = new Button("← Scopri");
@@ -666,11 +901,17 @@ public class App extends Application {
         Label lbl = new Label(title);
         lbl.setTextFill(Color.WHITE);
         lbl.setFont(Font.font("Segoe UI", FontWeight.BOLD, 22));
-        top.getChildren().addAll(back, lbl);
+        Button topButton = createBackToTopButton();
+        boolean showTopButton = results != null && results.size() >= 29;
+        topButton.setVisible(showTopButton);
+        topButton.setManaged(showTopButton);
+        Region topSpacer = new Region();
+        HBox.setHgrow(topSpacer, Priority.ALWAYS);
+        top.getChildren().addAll(back, lbl, topSpacer, topButton);
 
         TilePane grid = new TilePane();
-        grid.setHgap(14);
-        grid.setVgap(16);
+        grid.setHgap(18);
+        grid.setVgap(20);
         grid.setPrefColumns(5);
         for (Anime a : results) grid.getChildren().add(createAnimeGridCard(a));
         if (results.isEmpty()) {
@@ -682,6 +923,17 @@ public class App extends Application {
         discoverContent.getChildren().addAll(top, grid);
     }
 
+    private Button createBackToTopButton() {
+        Button btn = new Button("↑ Torna su");
+        btn.setStyle("-fx-background-color: rgba(15,23,42,0.72); -fx-text-fill: #dbeafe; -fx-font-weight: bold; -fx-background-radius: 999; -fx-border-radius: 999; -fx-border-color: rgba(147,197,253,0.28); -fx-padding: 7 13; -fx-cursor: hand;");
+        btn.setOnAction(e -> scrollDiscoverToTop());
+        return btn;
+    }
+
+    private void scrollDiscoverToTop() {
+        if (discoverScrollPane != null) Platform.runLater(() -> discoverScrollPane.setVvalue(0));
+    }
+
     // --- 4. IMPOSTAZIONI ---
     private void initSettingsPane() {
         settingsPane = new VBox(24);
@@ -691,31 +943,67 @@ public class App extends Application {
         title.setTextFill(Color.WHITE);
         title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 26));
 
+        VBox sectionUpdate = new VBox(10);
+        Label lblUpdate = new Label("Aggiornamenti");
+        lblUpdate.setTextFill(Color.web("#cbd5e1"));
+        lblUpdate.setFont(Font.font("Segoe UI", FontWeight.BOLD, 16));
+
+        Label versionLabel = new Label("Versione attuale: " + APP_VERSION);
+        versionLabel.setTextFill(Color.web("#94a3b8"));
+        versionLabel.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 13));
+
+        Button btnCheckUpdates = createSettingsButton("Controlla aggiornamenti");
+        btnCheckUpdates.setOnAction(e -> checkForUpdates(true));
+        sectionUpdate.getChildren().addAll(lblUpdate, versionLabel, btnCheckUpdates);
+
         VBox sectionTheme = new VBox(10);
-        Label lblTheme = new Label("Colore dello Sfondo");
+        Label lblTheme = new Label("Aspetto e sfondo");
         lblTheme.setTextFill(Color.web("#cbd5e1"));
         lblTheme.setFont(Font.font("Segoe UI", FontWeight.BOLD, 16));
 
         ColorPicker colorPicker = new ColorPicker(Color.web("#0a1128"));
         colorPicker.setStyle("-fx-background-color: #1e293b;");
-        colorPicker.setOnAction(e -> root.setBackground(new Background(new BackgroundFill(colorPicker.getValue(), CornerRadii.EMPTY, Insets.EMPTY))));
-        sectionTheme.getChildren().addAll(lblTheme, colorPicker);
+        colorPicker.setOnAction(e -> applySolidBackground(colorPicker.getValue()));
+
+        Button btnChooseBg = createSettingsButton("Scegli immagine come sfondo");
+        btnChooseBg.setOnAction(e -> chooseBackgroundImage());
+
+        Button btnResetBg = createSettingsButton("Ripristina sfondo predefinito");
+        btnResetBg.setOnAction(e -> applySolidBackground(Color.web("#0a1128")));
+
+        HBox bgActions = new HBox(12, colorPicker, btnChooseBg, btnResetBg);
+        bgActions.setAlignment(Pos.CENTER_LEFT);
+
+        sectionTheme.getChildren().addAll(lblTheme, bgActions);
 
         VBox sectionBackup = new VBox(12);
-        Label lblBackup = new Label("Backup dei Dati");
+        Label lblBackup = new Label("Backup e dati");
         lblBackup.setTextFill(Color.web("#cbd5e1"));
         lblBackup.setFont(Font.font("Segoe UI", FontWeight.BOLD, 16));
 
-        Button btnExport = new Button("Esporta Lista");
-        btnExport.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-background-radius: 12; -fx-padding: 9 16; -fx-cursor: hand;");
+        Button btnExport = createSettingsButton("Esporta Lista");
         btnExport.setOnAction(e -> exportLibraryWithDialog());
 
-        Button btnImport = new Button("Importa Lista");
-        btnImport.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-background-radius: 12; -fx-padding: 9 16; -fx-cursor: hand;");
+        Button btnImport = createSettingsButton("Importa Lista");
         btnImport.setOnAction(e -> importLibraryWithDialog());
 
-        sectionBackup.getChildren().addAll(lblBackup, new HBox(14, btnExport, btnImport));
-        settingsPane.getChildren().addAll(title, new Separator(), sectionTheme, new Separator(), sectionBackup);
+        Button btnClear = createSettingsButtonDanger("Cancella tutta la lista");
+        btnClear.setOnAction(e -> clearLibraryWithConfirm());
+
+        sectionBackup.getChildren().addAll(lblBackup, new HBox(14, btnExport, btnImport, btnClear));
+        settingsPane.getChildren().addAll(title, new Separator(), sectionUpdate, new Separator(), sectionTheme, new Separator(), sectionBackup);
+    }
+
+    private Button createSettingsButton(String text) {
+        Button btn = new Button(text);
+        btn.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-background-radius: 12; -fx-padding: 9 16; -fx-cursor: hand; -fx-font-weight: bold;");
+        return btn;
+    }
+
+    private Button createSettingsButtonDanger(String text) {
+        Button btn = new Button(text);
+        btn.setStyle("-fx-background-color: rgba(239,68,68,0.15); -fx-text-fill: #fecaca; -fx-background-radius: 12; -fx-border-radius: 12; -fx-border-color: rgba(248,113,113,0.35); -fx-padding: 9 16; -fx-cursor: hand; -fx-font-weight: bold;");
+        return btn;
     }
 
     private void exportLibraryWithDialog() {
@@ -755,11 +1043,11 @@ public class App extends Application {
     // --- 5. SMART CARD ANIME (POPUP AFFIANCATO E AGGIORNAMENTO IN-PLACE) ---
     private StackPane createAnimeGridCard(Anime anime) {
         StackPane cardRoot = new StackPane();
-        
-        Anime localInstance = manager.all().stream().filter(x -> x.id == anime.id).findFirst().orElse(null);
-        boolean isSaved = (localInstance != null);
+        cardRoot.setPadding(new Insets(7));
+        cardRoot.setMinWidth(186);
+        cardRoot.setPrefWidth(186);
+        cardRoot.setMinHeight(342);
 
-        // BASE LAYER (Stabile)
         VBox baseLayer = new VBox(8);
         baseLayer.setPadding(new Insets(10));
         baseLayer.setPrefWidth(172);
@@ -767,38 +1055,42 @@ public class App extends Application {
 
         Label statusBadge = new Label();
         statusBadge.setFont(Font.font("Segoe UI", FontWeight.BOLD, 9));
-        statusBadge.setPadding(new Insets(3, 6, 3, 6));
-        statusBadge.setStyle("-fx-background-radius: 4; -fx-text-fill: white;");
+        statusBadge.setPadding(new Insets(4, 7, 4, 7));
+        statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white;");
 
-        // Aggiorna lo stile in-place senza far sparire e riapparire il menu!
         Runnable updateBaseStyle = () -> {
             Anime currentLocal = manager.all().stream().filter(x -> x.id == anime.id).findFirst().orElse(null);
-            String borderAccent = "#223254"; 
+            String borderAccent = "#223254";
             if (currentLocal != null) {
+                anime.status = currentLocal.status;
                 switch (currentLocal.status) {
-                    case WATCHING -> { borderAccent = "#ff9f43"; statusBadge.setText("IN VISIONE"); statusBadge.setStyle("-fx-background-radius: 4; -fx-text-fill: white; -fx-background-color: #ff9f43;"); }
-                    case WATCHED -> { borderAccent = "#1dd1a1"; statusBadge.setText("VISTI"); statusBadge.setStyle("-fx-background-radius: 4; -fx-text-fill: white; -fx-background-color: #1dd1a1;"); }
-                    case DROPPED -> { borderAccent = "#ff6b6b"; statusBadge.setText("DROPPATO"); statusBadge.setStyle("-fx-background-radius: 4; -fx-text-fill: white; -fx-background-color: #ff6b6b;"); }
-                    case TO_WATCH -> { borderAccent = "#3b82f6"; statusBadge.setText("DA VEDERE"); statusBadge.setStyle("-fx-background-radius: 4; -fx-text-fill: white; -fx-background-color: #3b82f6;"); }
+                    case WATCHING -> { borderAccent = "#ff9f43"; statusBadge.setText("IN VISIONE"); statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white; -fx-background-color: #ff9f43;"); }
+                    case WATCHED -> { borderAccent = "#1dd1a1"; statusBadge.setText("VISTO"); statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white; -fx-background-color: #1dd1a1;"); }
+                    case DROPPED -> { borderAccent = "#ff6b6b"; statusBadge.setText("DROPPATO"); statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white; -fx-background-color: #ff6b6b;"); }
+                    case TO_WATCH -> { borderAccent = "#3b82f6"; statusBadge.setText("DA VEDERE"); statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white; -fx-background-color: #3b82f6;"); }
                 }
             } else {
                 statusBadge.setText("NON IN LISTA");
-                statusBadge.setStyle("-fx-background-radius: 4; -fx-text-fill: white; -fx-background-color: #475569;");
+                statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white; -fx-background-color: #475569;");
             }
-            baseLayer.setStyle("-fx-background-color: rgba(22, 34, 61, 0.6); -fx-background-radius: 12; -fx-border-radius: 12; -fx-border-color: " + borderAccent + "; -fx-border-width: 2; -fx-cursor: hand;");
+            baseLayer.setStyle("-fx-background-color: rgba(15,23,42,0.88); -fx-background-radius: 16; -fx-border-radius: 16; -fx-border-color: " + borderAccent + "; -fx-border-width: 1.6; -fx-cursor: hand; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.24), 12, 0.16, 0, 4);");
         };
         updateBaseStyle.run();
+        cardRoot.getProperties().put("refreshCard", updateBaseStyle);
+        cardRoot.setUserData(anime);
 
         ImageView poster = new ImageView();
-        poster.setFitWidth(148); poster.setFitHeight(210);
+        poster.setFitWidth(148);
+        poster.setFitHeight(210);
+        poster.setPreserveRatio(false);
         if (anime.coverImage != null && !anime.coverImage.isBlank()) poster.setImage(new Image(anime.coverImage, 148, 210, false, true, true));
 
         Label title = new Label(anime.title != null ? anime.title : "Titolo sconosciuto");
         title.setTextFill(Color.web("#f8fafc"));
         title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 14));
         title.setWrapText(true);
-        title.setPrefHeight(46);
-        title.setLineSpacing(1.5);
+        title.setPrefHeight(44);
+        title.setLineSpacing(1.2);
 
         Label smallMeta = new Label(formatValue(anime.format) + "  •  " + formatEpisodes(anime.episodes) + " ep");
         smallMeta.setTextFill(Color.web("#93a4bd"));
@@ -807,11 +1099,13 @@ public class App extends Application {
         baseLayer.getChildren().addAll(statusBadge, poster, title, smallMeta);
         cardRoot.getChildren().add(baseLayer);
 
-        // POPUP LATERALE (Accanto alla card)
         Popup sidePopup = new Popup();
-        VBox popupContent = new VBox(8);
-        popupContent.setStyle("-fx-background-color: #060b1a; -fx-border-color: #3b82f6; -fx-border-width: 1.5; -fx-background-radius: 10; -fx-border-radius: 10; -fx-padding: 12; -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.6), 10, 0, 0, 0);");
-        popupContent.setPrefWidth(170);
+        sidePopup.setAutoHide(false);
+        sidePopup.setHideOnEscape(true);
+
+        VBox popupContent = new VBox(9);
+        popupContent.setPrefWidth(192);
+        popupContent.setStyle("-fx-background-color: #071020; -fx-border-color: rgba(96,165,250,0.70); -fx-border-width: 1.3; -fx-background-radius: 14; -fx-border-radius: 14; -fx-padding: 13; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.62), 22, 0.22, 0, 8);");
 
         VBox hoverInfo = new VBox(7);
         hoverInfo.getChildren().addAll(
@@ -821,76 +1115,93 @@ public class App extends Application {
             createHoverInfoLine("Anno", formatValue(anime.year)),
             createHoverInfoLine("Generi", anime.genres != null && !anime.genres.isEmpty() ? String.join(", ", anime.genres) : "N/D")
         );
-        
-        VBox quickAddMenu = new VBox(5);
+
+        VBox quickAddMenu = new VBox(6);
         quickAddMenu.setAlignment(Pos.CENTER);
-        
-        String btnBaseStyle = "-fx-background-radius: 6; -fx-text-fill: white; -fx-cursor: hand; -fx-font-weight: bold; -fx-font-size: 11px; -fx-padding: 5 0;";
+        Label quickTitle = new Label("Imposta stato");
+        quickTitle.setTextFill(Color.web("#cbd5e1"));
+        quickTitle.setFont(Font.font("Segoe UI", FontWeight.BOLD, 11));
+
+        String btnBaseStyle = "-fx-background-radius: 10; -fx-text-fill: white; -fx-cursor: hand; -fx-font-weight: bold; -fx-font-size: 11px; -fx-padding: 7 0;";
         Button btnWatch = new Button("In Visione"); btnWatch.setMaxWidth(Double.MAX_VALUE); btnWatch.setStyle("-fx-background-color: #ff9f43; " + btnBaseStyle);
-        Button btnSeen = new Button("Visti"); btnSeen.setMaxWidth(Double.MAX_VALUE); btnSeen.setStyle("-fx-background-color: #1dd1a1; " + btnBaseStyle);
+        Button btnSeen = new Button("Visto"); btnSeen.setMaxWidth(Double.MAX_VALUE); btnSeen.setStyle("-fx-background-color: #1dd1a1; " + btnBaseStyle);
         Button btnPlan = new Button("Da Vedere"); btnPlan.setMaxWidth(Double.MAX_VALUE); btnPlan.setStyle("-fx-background-color: #3b82f6; " + btnBaseStyle);
         Button btnDrop = new Button("Droppato"); btnDrop.setMaxWidth(Double.MAX_VALUE); btnDrop.setStyle("-fx-background-color: #ff6b6b; " + btnBaseStyle);
 
         Runnable applyQuickStatus = () -> {
             manager.add(anime);
             saveLibraryData("Stato aggiornato.");
-            
             updateBaseStyle.run();
-            updateFilterButtonCounts();
-            sidePopup.hide(); 
-            
-            if (libraryPane.isVisible() && !currentLibraryFilter.equals("TUTTI") && !currentLibraryFilter.equals(anime.statusToString().toUpperCase())) {
-                FadeTransition out = new FadeTransition(Duration.millis(200), cardRoot);
-                out.setToValue(0);
-                out.setOnFinished(evt -> libraryGrid.getChildren().remove(cardRoot));
-                out.play();
-            }
+            refreshAllViews();
+            sidePopup.hide();
         };
 
         btnWatch.setOnAction(e -> { anime.status = Anime.Status.WATCHING; applyQuickStatus.run(); });
         btnSeen.setOnAction(e -> { anime.status = Anime.Status.WATCHED; applyQuickStatus.run(); });
         btnPlan.setOnAction(e -> { anime.status = Anime.Status.TO_WATCH; applyQuickStatus.run(); });
         btnDrop.setOnAction(e -> { anime.status = Anime.Status.DROPPED; applyQuickStatus.run(); });
+        quickAddMenu.getChildren().addAll(quickTitle, btnWatch, btnSeen, btnPlan, btnDrop);
 
-        quickAddMenu.getChildren().addAll(new Label("Imposta Stato:"), btnWatch, btnSeen, btnPlan, btnDrop);
-        ((Label)quickAddMenu.getChildren().get(0)).setTextFill(Color.web("#94a3b8"));
-        ((Label)quickAddMenu.getChildren().get(0)).setFont(Font.font("Segoe UI", 10));
-
-        if (isSaved) {
-            popupContent.getChildren().addAll(hoverInfo);
-        } else {
-            popupContent.getChildren().addAll(hoverInfo, new Separator(), quickAddMenu);
-        }
+        if (manager.all().stream().anyMatch(x -> x.id == anime.id)) popupContent.getChildren().addAll(hoverInfo);
+        else popupContent.getChildren().addAll(hoverInfo, new Separator(), quickAddMenu);
         sidePopup.getContent().add(popupContent);
 
-        // ANIMAZIONI HOVER E ORIENTAMENTO POSIZIONE
-        ScaleTransition scaleIn = new ScaleTransition(Duration.millis(120), cardRoot); scaleIn.setToX(1.04); scaleIn.setToY(1.04);
-        ScaleTransition scaleOut = new ScaleTransition(Duration.millis(120), cardRoot); scaleOut.setToX(1.0); scaleOut.setToY(1.0);
-
-        cardRoot.setOnMouseEntered(e -> {
-            scaleIn.playFromStart();
-            
-            if (!sidePopup.isShowing()) {
-                Point2D screenPos = cardRoot.localToScreen(cardRoot.getWidth(), 0);
-                sidePopup.show(cardRoot, screenPos.getX() + 6, screenPos.getY());
+        PauseTransition showDelay = new PauseTransition(Duration.millis(280));
+        PauseTransition hideDelay = new PauseTransition(Duration.millis(80));
+        hideDelay.setOnFinished(evt -> {
+            if (!cardRoot.isHover() && !popupContent.isHover()) {
+                sidePopup.hide();
+                if (activeCardPopup == sidePopup) activeCardPopup = null;
             }
         });
 
-        cardRoot.setOnMouseExited(e -> {
-            scaleOut.playFromStart();
-            Platform.runLater(() -> {
-                if (!popupContent.isHover() && !cardRoot.isHover()) sidePopup.hide();
-            });
+        showDelay.setOnFinished(evt -> {
+            if (!cardRoot.isHover()) return;
+            if (activeCardPopup != null && activeCardPopup != sidePopup) {
+                activeCardPopup.hide();
+            }
+            activeCardPopup = sidePopup;
+            Point2D rightPos = cardRoot.localToScreen(cardRoot.getWidth() + 14, 6);
+            Point2D leftPos = cardRoot.localToScreen(-206, 6);
+            double popupX = rightPos.getX();
+            if (cardRoot.getScene() != null && cardRoot.getScene().getWindow() != null) {
+                double screenRight = cardRoot.getScene().getWindow().getX() + cardRoot.getScene().getWindow().getWidth();
+                if (popupX + 210 > screenRight) popupX = leftPos.getX();
+            }
+            if (!sidePopup.isShowing()) {
+                sidePopup.show(cardRoot, popupX, rightPos.getY());
+            } else {
+                sidePopup.setX(popupX);
+                sidePopup.setY(rightPos.getY());
+            }
         });
 
-        popupContent.setOnMouseExited(e -> {
-            Platform.runLater(() -> {
-                if (!popupContent.isHover() && !cardRoot.isHover()) sidePopup.hide();
-            });
+        cardRoot.setOnMouseEntered(e -> {
+            hideDelay.stop();
+            showDelay.playFromStart();
+            baseLayer.toFront();
+            ScaleTransition st = new ScaleTransition(Duration.millis(150), baseLayer);
+            st.setToX(1.035);
+            st.setToY(1.035);
+            st.setInterpolator(Interpolator.EASE_OUT);
+            st.play();
         });
+        cardRoot.setOnMouseExited(e -> {
+            showDelay.stop();
+            hideDelay.playFromStart();
+            ScaleTransition st = new ScaleTransition(Duration.millis(150), baseLayer);
+            st.setToX(1.0);
+            st.setToY(1.0);
+            st.setInterpolator(Interpolator.EASE_OUT);
+            st.play();
+        });
+        popupContent.setOnMouseEntered(e -> { hideDelay.stop(); showDelay.stop(); });
+        popupContent.setOnMouseExited(e -> hideDelay.playFromStart());
 
         cardRoot.setOnMouseClicked(e -> {
+            hideSuggestionPopupCompletely();
             sidePopup.hide();
+            if (activeCardPopup == sidePopup) activeCardPopup = null;
             showAnimeDetails(anime);
         });
 
@@ -991,6 +1302,8 @@ public class App extends Application {
 
     private void showAnimeDetails(Anime anime) {
         if (anime == null) return;
+        hideSuggestionPopupCompletely();
+        hideActiveCardPopup();
         Anime local = manager.all().stream().filter(x -> x.id == anime.id).findFirst().orElse(null);
         boolean exists = (local != null);
         activeAnime = exists ? local : anime;
@@ -1005,8 +1318,10 @@ public class App extends Application {
         updateDetailStatusButtons();
         addButton.setVisible(!exists);
         addButton.setManaged(!exists);
+        addButton.setDisable(false);
         removeButton.setVisible(exists);
         removeButton.setManaged(exists);
+        removeButton.setDisable(!exists);
 
         if (activeAnime.coverImage != null && !activeAnime.coverImage.isBlank()) {
             coverView.setImage(new Image(activeAnime.coverImage, 240, 360, true, true, true));
@@ -1127,26 +1442,27 @@ public class App extends Application {
 
     private void addAnimeToLibrary() {
         if (activeAnime == null) return;
-        // lo stato viene scelto dai pulsanti moderni
         manager.add(activeAnime);
         saveLibraryData("Salvato in lista.");
-        addButton.setDisable(true); removeButton.setDisable(false);
-        showAnimeDetails(activeAnime); 
+        refreshAllViews();
+        showAnimeDetails(activeAnime);
     }
 
     private void removeAnimeFromLibrary() {
         if (activeAnime == null) return;
-        manager.remove(activeAnime.id);
+        int removedId = activeAnime.id;
+        manager.remove(removedId);
+        activeAnime.status = Anime.Status.TO_WATCH;
         saveLibraryData("Rimosso dalla lista.");
-        addButton.setDisable(false); removeButton.setDisable(true);
+        refreshAllViews();
         showAnimeDetails(activeAnime);
     }
 
     private Button createStatusChip(String text, Anime.Status status) {
         Button btn = new Button(text);
-        btn.setMinWidth(112);
-        btn.setMinHeight(36);
-        btn.setStyle("-fx-background-color: #1e293b; -fx-text-fill: #cbd5e1; -fx-background-radius: 14; -fx-border-radius: 14; -fx-border-color: #334155; -fx-border-width: 1; -fx-padding: 8 13; -fx-font-weight: bold; -fx-font-size: 12px; -fx-cursor: hand;");
+        btn.setMinWidth(88);
+        btn.setMinHeight(28);
+        btn.setStyle("-fx-background-color: #1e293b; -fx-text-fill: #cbd5e1; -fx-background-radius: 11; -fx-border-radius: 11; -fx-border-color: #334155; -fx-border-width: 1; -fx-padding: 5 9; -fx-font-weight: bold; -fx-font-size: 11px; -fx-cursor: hand;");
         btn.setOnAction(e -> setActiveAnimeStatus(status));
         return btn;
     }
@@ -1167,10 +1483,19 @@ public class App extends Application {
         }
         metaLabel.setText("STATO NELLA TUA LISTA: " + activeAnime.statusToString().toUpperCase());
         updateDetailStatusButtons();
+        refreshAllViews();
     }
 
     private void updateDetailStatusButtons() {
         if (activeAnime == null) return;
+        boolean exists = manager.all().stream().anyMatch(x -> x.id == activeAnime.id);
+        if (!exists) {
+            styleStatusChip(detailPlanButton, false, "#3b82f6");
+            styleStatusChip(detailWatchingButton, false, "#ff9f43");
+            styleStatusChip(detailWatchedButton, false, "#1dd1a1");
+            styleStatusChip(detailDroppedButton, false, "#ff6b6b");
+            return;
+        }
         styleStatusChip(detailPlanButton, activeAnime.status == Anime.Status.TO_WATCH, "#3b82f6");
         styleStatusChip(detailWatchingButton, activeAnime.status == Anime.Status.WATCHING, "#ff9f43");
         styleStatusChip(detailWatchedButton, activeAnime.status == Anime.Status.WATCHED, "#1dd1a1");
@@ -1180,9 +1505,9 @@ public class App extends Application {
     private void styleStatusChip(Button btn, boolean selected, String color) {
         if (btn == null) return;
         if (selected) {
-            btn.setStyle("-fx-background-color: " + color + "; -fx-text-fill: white; -fx-background-radius: 14; -fx-border-radius: 14; -fx-border-color: rgba(255,255,255,0.35); -fx-border-width: 1; -fx-padding: 8 13; -fx-font-weight: bold; -fx-font-size: 12px; -fx-cursor: hand;");
+            btn.setStyle("-fx-background-color: " + color + "; -fx-text-fill: white; -fx-background-radius: 11; -fx-border-radius: 11; -fx-border-color: rgba(255,255,255,0.35); -fx-border-width: 1; -fx-padding: 5 9; -fx-font-weight: bold; -fx-font-size: 11px; -fx-cursor: hand;");
         } else {
-            btn.setStyle("-fx-background-color: #1e293b; -fx-text-fill: #cbd5e1; -fx-background-radius: 14; -fx-border-radius: 14; -fx-border-color: #334155; -fx-border-width: 1; -fx-padding: 8 13; -fx-font-weight: bold; -fx-font-size: 12px; -fx-cursor: hand;");
+            btn.setStyle("-fx-background-color: #1e293b; -fx-text-fill: #cbd5e1; -fx-background-radius: 11; -fx-border-radius: 11; -fx-border-color: #334155; -fx-border-width: 1; -fx-padding: 5 9; -fx-font-weight: bold; -fx-font-size: 11px; -fx-cursor: hand;");
         }
     }
 
@@ -1204,6 +1529,7 @@ public class App extends Application {
         catch (Exception e) { statusBar.setText("Database pronto."); }
         updateFilterButtonCounts();
         updateDashboardStats();
+        if (libraryGrid != null) refreshLibraryGrid();
     }
 
     private void saveLibraryData(String msg) {
@@ -1211,19 +1537,464 @@ public class App extends Application {
         catch (Exception e) { statusBar.setText("Errore salvataggio."); }
     }
 
+
+    private void refreshAllViews() {
+        updateFilterButtonCounts();
+        updateDashboardStats();
+        if (libraryGrid != null) refreshLibraryGrid();
+        refreshVisibleAnimeCards(mainContentStack);
+        if (activeAnime != null && detailOverlay != null && detailOverlay.isVisible()) {
+            boolean exists = manager.all().stream().anyMatch(x -> x.id == activeAnime.id);
+            metaLabel.setText(exists ? "STATO NELLA TUA LISTA: " + activeAnime.statusToString().toUpperCase() : "NON ANCORA SALVATO NELLA TUA LISTA");
+            addButton.setVisible(!exists);
+            addButton.setManaged(!exists);
+            addButton.setDisable(false);
+            removeButton.setVisible(exists);
+            removeButton.setManaged(exists);
+            removeButton.setDisable(!exists);
+            updateDetailStatusButtons();
+        }
+    }
+
+
+    private void refreshVisibleAnimeCards(Node node) {
+        if (node == null) return;
+        Object updater = node.getProperties().get("refreshCard");
+        if (updater instanceof Runnable r) r.run();
+        if (node instanceof Parent parent) {
+            for (Node child : parent.getChildrenUnmodifiable()) refreshVisibleAnimeCards(child);
+        }
+    }
+
+    private void smoothHorizontalScroll(ScrollPane pane, double targetValue) {
+        Timeline timeline = new Timeline(
+            new KeyFrame(Duration.millis(320),
+                new KeyValue(pane.hvalueProperty(), targetValue, Interpolator.EASE_BOTH)
+            )
+        );
+        timeline.play();
+    }
+
+
+    private void applySavedSettings() {
+        // Per ora non applico filtri sui contenuti: lascio AniList libero di restituire i risultati.
+    }
+
+    private void applySolidBackground(Color color) {
+        if (root == null) return;
+        root.setBackground(new Background(new BackgroundFill(color, CornerRadii.EMPTY, Insets.EMPTY)));
+        if (mainContentStack != null) {
+            mainContentStack.setStyle("-fx-background-color: transparent;");
+        }
+    }
+
+    private void chooseBackgroundImage() {
+        FileChooser fc = new FileChooser();
+        fc.setTitle("Scegli immagine di sfondo");
+        fc.getExtensionFilters().addAll(
+            new FileChooser.ExtensionFilter("Immagini", "*.png", "*.jpg", "*.jpeg", "*.webp"),
+            new FileChooser.ExtensionFilter("Tutti i file", "*.*")
+        );
+        File file = fc.showOpenDialog(root.getScene().getWindow());
+        if (file == null) return;
+        try {
+            Image image = new Image(file.toURI().toString());
+            BackgroundSize size = new BackgroundSize(100, 100, true, true, false, true);
+            BackgroundImage bg = new BackgroundImage(image, BackgroundRepeat.NO_REPEAT, BackgroundRepeat.NO_REPEAT, BackgroundPosition.CENTER, size);
+            root.setBackground(new Background(bg));
+            mainContentStack.setStyle("-fx-background-color: rgba(2, 6, 23, 0.52); -fx-background-radius: 22;");
+            statusBar.setText("Sfondo personalizzato applicato.");
+        } catch (Exception ex) {
+            statusBar.setText("Impossibile caricare l'immagine scelta.");
+        }
+    }
+
+    private void clearLibraryWithConfirm() {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Cancella lista");
+        alert.setHeaderText("Vuoi davvero cancellare tutta la tua lista?");
+        alert.setContentText("Questa azione rimuove tutti gli anime salvati localmente.");
+        ButtonType cancel = new ButtonType("Annulla", ButtonBar.ButtonData.CANCEL_CLOSE);
+        ButtonType confirm = new ButtonType("Cancella", ButtonBar.ButtonData.OK_DONE);
+        alert.getButtonTypes().setAll(cancel, confirm);
+        alert.showAndWait().ifPresent(type -> {
+            if (type == confirm) {
+                for (Anime anime : manager.all()) manager.remove(anime.id);
+                saveLibraryData("Lista cancellata.");
+                refreshAllViews();
+            }
+        });
+    }
+
+    private void showChangelogIfFirstRunOfVersion() {
+        try {
+            Properties props = loadAppProperties();
+            String lastSeen = props.getProperty("lastSeenVersion", "");
+            if (!APP_VERSION.equals(lastSeen)) {
+                showStyledMessageDialog(
+                    "Novità MyAnimeDesk",
+                    "MyAnimeDesk " + APP_VERSION,
+                    CURRENT_CHANGELOG,
+                    "Ok, continua",
+                    () -> {
+                        try {
+                            Properties updatedProps = loadAppProperties();
+                            updatedProps.setProperty("lastSeenVersion", APP_VERSION);
+                            saveAppProperties(updatedProps);
+                        } catch (Exception ignored) { }
+                    }
+                );
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private void checkForUpdates(boolean manual) {
+        Task<UpdateInfo> task = new Task<>() {
+            @Override protected UpdateInfo call() throws Exception {
+                HttpClient http = HttpClient.newHttpClient();
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(LATEST_RELEASE_API))
+                    .timeout(java.time.Duration.ofSeconds(8))
+                    .header("Accept", "application/vnd.github+json")
+                    .header("User-Agent", "MyAnimeDesk/" + APP_VERSION)
+                    .GET()
+                    .build();
+                HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() != 200) throw new IOException("GitHub API " + response.statusCode());
+                String body = response.body();
+                String tag = extractJsonString(body, "tag_name");
+                String url = extractJsonString(body, "html_url");
+                String notes = extractJsonString(body, "body");
+                if (url == null || url.isBlank()) url = RELEASES_URL;
+                return new UpdateInfo(tag, url, notes);
+            }
+        };
+        task.setOnSucceeded(e -> {
+            UpdateInfo info = task.getValue();
+            if (info != null && isNewerVersion(info.version, APP_VERSION)) {
+                String message = "Versione installata: " + APP_VERSION + "\n" +
+                                 "Nuova versione: " + cleanVersion(info.version) + "\n\n" +
+                                 "Vuoi aprire GitHub Releases per scaricare l'aggiornamento?";
+                showStyledConfirmDialog(
+                    "Aggiornamento disponibile",
+                    "È disponibile MyAnimeDesk " + cleanVersion(info.version),
+                    message,
+                    "Apri GitHub",
+                    () -> openUrl(info.url != null ? info.url : RELEASES_URL),
+                    "Più tardi",
+                    null
+                );
+            } else if (manual) {
+                showStyledMessageDialog(
+                    "Aggiornamenti",
+                    "MyAnimeDesk è aggiornato",
+                    "Stai usando la versione più recente disponibile.\n\nVersione attuale: " + APP_VERSION,
+                    "Ok",
+                    null
+                );
+            }
+        });
+        task.setOnFailed(e -> {
+            if (manual) {
+                showStyledMessageDialog(
+                    "Aggiornamenti",
+                    "Controllo aggiornamenti non riuscito",
+                    "Controlla la connessione a Internet oppure riprova più tardi.",
+                    "Ok",
+                    null
+                );
+            }
+        });
+        executor.submit(task);
+    }
+
+    private void showStyledMessageDialog(String title, String subtitle, String message, String buttonText, Runnable onClose) {
+        showStyledDialog(title, subtitle, message, buttonText, onClose, null, null);
+    }
+
+    private void showStyledConfirmDialog(String title, String subtitle, String message,
+                                         String primaryText, Runnable primaryAction,
+                                         String secondaryText, Runnable secondaryAction) {
+        showStyledDialog(title, subtitle, message, primaryText, primaryAction, secondaryText, secondaryAction);
+    }
+
+    private void showStyledDialog(String title, String subtitle, String message,
+                                  String primaryText, Runnable primaryAction,
+                                  String secondaryText, Runnable secondaryAction) {
+        if (mainContentStack == null) {
+            Alert fallback = new Alert(secondaryText == null ? Alert.AlertType.INFORMATION : Alert.AlertType.CONFIRMATION);
+            fallback.setTitle(title);
+            fallback.setHeaderText(subtitle);
+            fallback.setContentText(message);
+            fallback.showAndWait();
+            if (primaryAction != null) primaryAction.run();
+            return;
+        }
+
+        StackPane overlay = new StackPane();
+        overlay.setPickOnBounds(true);
+        overlay.setAlignment(Pos.CENTER);
+        overlay.setPadding(new Insets(30));
+        overlay.setStyle("-fx-background-color: rgba(2, 6, 23, 0.74);");
+
+        VBox card = new VBox(18);
+        card.setPadding(new Insets(28, 34, 26, 34));
+        card.setMaxWidth(820);
+        card.setPrefWidth(820);
+        card.setMinWidth(620);
+        card.setMaxHeight(Region.USE_PREF_SIZE);
+        card.setStyle(
+            "-fx-background-color: linear-gradient(to bottom right, rgba(15,23,42,0.98), rgba(2,6,23,0.98));" +
+            "-fx-background-radius: 28;" +
+            "-fx-border-radius: 28;" +
+            "-fx-border-width: 1;" +
+            "-fx-border-color: rgba(96,165,250,0.42);" +
+            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.58), 34, 0.25, 0, 14);"
+        );
+
+        Label badge = new Label(title);
+        badge.setTextFill(Color.web("#93c5fd"));
+        badge.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
+        badge.setPadding(new Insets(7, 14, 7, 14));
+        badge.setStyle(
+            "-fx-background-color: rgba(59,130,246,0.16);" +
+            "-fx-background-radius: 999;" +
+            "-fx-border-color: rgba(96,165,250,0.36);" +
+            "-fx-border-radius: 999;" +
+            "-fx-border-width: 1;"
+        );
+
+        Label header = new Label(subtitle);
+        header.setTextFill(Color.WHITE);
+        header.setFont(Font.font("Segoe UI", FontWeight.EXTRA_BOLD, 26));
+        header.setWrapText(true);
+
+        TextArea body = new TextArea(message == null ? "" : message);
+        body.setEditable(false);
+        body.setWrapText(true);
+        body.setFocusTraversable(false);
+        body.setFont(Font.font("Segoe UI", FontWeight.NORMAL, 15));
+        body.setStyle(
+            "-fx-control-inner-background: transparent;" +
+            "-fx-background-color: transparent;" +
+            "-fx-text-fill: #dbeafe;" +
+            "-fx-highlight-fill: rgba(59,130,246,0.35);" +
+            "-fx-highlight-text-fill: white;" +
+            "-fx-border-color: transparent;" +
+            "-fx-padding: 0;"
+        );
+
+        ScrollPane bodyScroll = new ScrollPane(body);
+        bodyScroll.setFitToWidth(true);
+        bodyScroll.setFitToHeight(true);
+        bodyScroll.setPrefHeight(430);
+        bodyScroll.setMinHeight(260);
+        bodyScroll.setMaxHeight(520);
+        bodyScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        bodyScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        bodyScroll.setStyle(
+            "-fx-background: transparent;" +
+            "-fx-background-color: transparent;" +
+            "-fx-control-inner-background: transparent;" +
+            "-fx-padding: 0;"
+        );
+        bodyScroll.getStyleClass().add("modern-scroll");
+        VBox.setVgrow(bodyScroll, Priority.ALWAYS);
+
+        HBox actions = new HBox(12);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+        actions.setPadding(new Insets(8, 0, 0, 0));
+
+        Button primary = createDialogButton(primaryText == null ? "Ok" : primaryText, true);
+        Button secondary = null;
+
+        Runnable closeDialog = () -> {
+            FadeTransition fadeOut = new FadeTransition(Duration.millis(120), overlay);
+            fadeOut.setToValue(0);
+            fadeOut.setOnFinished(ev -> mainContentStack.getChildren().remove(overlay));
+            fadeOut.play();
+        };
+
+        primary.setOnAction(e -> {
+            closeDialog.run();
+            if (primaryAction != null) primaryAction.run();
+        });
+
+        if (secondaryText != null) {
+            secondary = createDialogButton(secondaryText, false);
+            secondary.setOnAction(e -> {
+                closeDialog.run();
+                if (secondaryAction != null) secondaryAction.run();
+            });
+            actions.getChildren().addAll(secondary, primary);
+        } else {
+            actions.getChildren().add(primary);
+        }
+
+        card.getChildren().addAll(badge, header, bodyScroll, actions);
+        overlay.getChildren().add(card);
+        mainContentStack.getChildren().add(overlay);
+
+        Platform.runLater(() -> {
+            double availableHeight = mainContentStack.getHeight() > 0 ? mainContentStack.getHeight() : 760;
+            double dialogHeight = Math.max(520, availableHeight - 100);
+            card.setPrefHeight(Math.min(720, dialogHeight));
+        });
+
+        overlay.setOpacity(0);
+        card.setScaleX(0.96);
+        card.setScaleY(0.96);
+
+        FadeTransition fadeIn = new FadeTransition(Duration.millis(150), overlay);
+        fadeIn.setToValue(1);
+
+        ScaleTransition scaleIn = new ScaleTransition(Duration.millis(180), card);
+        scaleIn.setToX(1);
+        scaleIn.setToY(1);
+        scaleIn.setInterpolator(Interpolator.EASE_OUT);
+
+        fadeIn.play();
+        scaleIn.play();
+    }
+
+    private Button createDialogButton(String text, boolean primary) {
+        Button btn = new Button(text);
+        btn.setMinHeight(40);
+        btn.setPadding(new Insets(10, 18, 10, 18));
+        btn.setFont(Font.font("Segoe UI", FontWeight.BOLD, 13));
+        btn.setCursor(javafx.scene.Cursor.HAND);
+        if (primary) {
+            btn.setTextFill(Color.WHITE);
+            btn.setStyle(
+                "-fx-background-color: linear-gradient(to right, #3b82f6, #6366f1);" +
+                "-fx-background-radius: 16;" +
+                "-fx-border-radius: 16;" +
+                "-fx-border-color: rgba(147,197,253,0.55);" +
+                "-fx-border-width: 1;" +
+                "-fx-effect: dropshadow(gaussian, rgba(59,130,246,0.30), 14, 0.20, 0, 4);"
+            );
+        } else {
+            btn.setTextFill(Color.web("#cbd5e1"));
+            btn.setStyle(
+                "-fx-background-color: rgba(15,23,42,0.92);" +
+                "-fx-background-radius: 16;" +
+                "-fx-border-radius: 16;" +
+                "-fx-border-color: rgba(148,163,184,0.22);" +
+                "-fx-border-width: 1;"
+            );
+        }
+        return btn;
+    }
+
+    private Properties loadAppProperties() throws IOException {
+        Properties props = new Properties();
+        if (Files.exists(SETTINGS_FILE)) {
+            try (InputStream in = Files.newInputStream(SETTINGS_FILE)) { props.load(in); }
+        }
+        return props;
+    }
+
+    private void saveAppProperties(Properties props) throws IOException {
+        if (!Files.exists(APP_DIR)) Files.createDirectories(APP_DIR);
+        try (OutputStream out = Files.newOutputStream(SETTINGS_FILE)) { props.store(out, "MyAnimeDesk settings"); }
+    }
+
+    private void openUrl(String url) {
+        try {
+            getHostServices().showDocument(url);
+        } catch (Exception ex) {
+            try {
+                if (Desktop.isDesktopSupported()) Desktop.getDesktop().browse(URI.create(url));
+            } catch (Exception ignored) { }
+        }
+    }
+
+    private String extractJsonString(String json, String key) {
+        if (json == null || key == null) return null;
+        String pattern = "\"" + key + "\"";
+        int keyIndex = json.indexOf(pattern);
+        if (keyIndex < 0) return null;
+        int colon = json.indexOf(':', keyIndex + pattern.length());
+        if (colon < 0) return null;
+        int start = json.indexOf('"', colon + 1);
+        if (start < 0) return null;
+        StringBuilder sb = new StringBuilder();
+        boolean escaped = false;
+        for (int i = start + 1; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (escaped) {
+                if (c == 'n') sb.append('\n');
+                else if (c == 't') sb.append('\t');
+                else sb.append(c);
+                escaped = false;
+            } else if (c == '\\') escaped = true;
+            else if (c == '"') break;
+            else sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    private boolean isNewerVersion(String remote, String local) {
+        int[] r = parseVersion(remote);
+        int[] l = parseVersion(local);
+        for (int i = 0; i < Math.max(r.length, l.length); i++) {
+            int rv = i < r.length ? r[i] : 0;
+            int lv = i < l.length ? l[i] : 0;
+            if (rv > lv) return true;
+            if (rv < lv) return false;
+        }
+        return false;
+    }
+
+    private int[] parseVersion(String version) {
+        String clean = cleanVersion(version);
+        String[] parts = clean.split("\\.");
+        int[] out = new int[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            try { out[i] = Integer.parseInt(parts[i].replaceAll("[^0-9]", "")); }
+            catch (Exception e) { out[i] = 0; }
+        }
+        return out;
+    }
+
+    private String cleanVersion(String version) {
+        if (version == null || version.isBlank()) return "0.0.0";
+        return version.trim().replaceFirst("^[vV]", "");
+    }
+
+    private static class UpdateInfo {
+        final String version;
+        final String url;
+        final String notes;
+        UpdateInfo(String version, String url, String notes) {
+            this.version = version;
+            this.url = url;
+            this.notes = notes;
+        }
+    }
+
     private HBox createStatusBar() {
+        Button refreshButton = new Button("Aggiorna GUI");
+        refreshButton.setStyle("-fx-background-color: rgba(37,99,235,0.20); -fx-text-fill: #bfdbfe; -fx-font-weight: bold; -fx-background-radius: 12; -fx-border-radius: 12; -fx-border-color: rgba(147,197,253,0.26); -fx-padding: 7 13; -fx-cursor: hand;");
+        refreshButton.setOnAction(e -> {
+            refreshAllViews();
+            statusBar.setText("GUI aggiornata.");
+        });
+
         statusBar = new Label("Pronto.");
         statusBar.setTextFill(Color.web("#94a3b8"));
-        
+
         Label copyrightLabel = new Label("© 2026 MyAnimeDesk");
         copyrightLabel.setTextFill(Color.web("#64748b"));
         copyrightLabel.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
 
-        Region spacer = new Region(); HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox footer = new HBox(statusBar, spacer, copyrightLabel);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox footer = new HBox(12, refreshButton, statusBar, spacer, copyrightLabel);
         footer.setAlignment(Pos.CENTER_LEFT);
         footer.setPadding(new Insets(10, 20, 10, 20));
         footer.setStyle("-fx-background-color: #040814; -fx-border-color: rgba(255,255,255,0.04); -fx-border-width: 1 0 0 0;");
         return footer;
     }
+
 }

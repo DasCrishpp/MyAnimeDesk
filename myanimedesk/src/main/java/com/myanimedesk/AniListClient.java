@@ -8,6 +8,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,6 +19,10 @@ public class AniListClient {
             .connectTimeout(Duration.ofSeconds(12))
             .build();
     private final ObjectMapper mapper = new ObjectMapper();
+    // Filtro 18+ rimosso: il client mostra i risultati restituiti da AniList senza bloccarli.
+    public void setHideAdultContent(boolean hideAdultContent) {
+        // Metodo lasciato vuoto per compatibilità con vecchie versioni dell'interfaccia.
+    }
 
     public List<Anime> search(String query) throws IOException, InterruptedException {
         return search(query, 10);
@@ -25,8 +30,8 @@ public class AniListClient {
 
     public List<Anime> search(String query, int perPage) throws IOException, InterruptedException {
         String gql = "query ($search: String, $perPage: Int) { " +
-                "Page(perPage: $perPage) { " +
-                "media(search: $search, type: ANIME, sort: [POPULARITY_DESC]) { " +
+                "Page(page: 1, perPage: $perPage) { " +
+                "media(search: $search, type: ANIME, sort: POPULARITY_DESC) { " +
                 animeFields() +
                 "} } }";
 
@@ -39,7 +44,7 @@ public class AniListClient {
                 .set("variables", variables)
                 .toString();
 
-        return executeAnimeQuery(payload);
+        return executePageQuery(payload);
     }
 
     public Anime getAnimeById(int id) throws IOException, InterruptedException {
@@ -54,48 +59,63 @@ public class AniListClient {
                 .set("variables", variables)
                 .toString();
 
-        HttpRequest req = createRequest(payload);
-        HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
-        if (resp.statusCode() != 200) throw new IOException("AniList API returned " + resp.statusCode());
+        HttpResponse<String> resp = client.send(createRequest(payload), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (resp.statusCode() != 200) {
+            throw new IOException("AniList HTTP " + resp.statusCode() + " - " + resp.body());
+        }
 
         JsonNode root = mapper.readTree(resp.body());
+        throwIfGraphQLError(root);
         JsonNode node = root.path("data").path("Media");
         if (node.isMissingNode() || node.isNull()) return null;
         return parseAnime(node);
     }
 
     public List<Anime> browse(String mode, String filter, int page, int perPage) throws IOException, InterruptedException {
-        String gql = "query ($page: Int, $perPage: Int, $sort: [MediaSort], $genre: String, $tag: String) { " +
+        String sort = "POPULARITY_DESC";
+        if ("RECENT".equalsIgnoreCase(mode)) {
+            sort = "START_DATE_DESC";
+        }
+
+        boolean useTag = "TAG".equalsIgnoreCase(mode) && filter != null && !filter.isBlank();
+        boolean useGenre = !useTag && filter != null && !filter.isBlank();
+
+        StringBuilder mediaArgs = new StringBuilder("type: ANIME, sort: ").append(sort);
+        if (useTag) mediaArgs.append(", tag: $tag");
+        if (useGenre) mediaArgs.append(", genre: $genre");
+
+        String gql = "query ($page: Int, $perPage: Int" +
+                (useGenre ? ", $genre: String" : "") +
+                (useTag ? ", $tag: String" : "") +
+                ") { " +
                 "Page(page: $page, perPage: $perPage) { " +
-                "media(type: ANIME, genre: $genre, tag: $tag, sort: $sort) { " +
+                "media(" + mediaArgs + ") { " +
                 animeFields() +
                 "} } }";
-
-        String sort = "POPULARITY_DESC";
-        if ("RECENT".equals(mode)) sort = "START_DATE_DESC";
-        if ("POPULAR".equals(mode) || "GENRE".equals(mode) || "TAG".equals(mode)) sort = "POPULARITY_DESC";
 
         var variables = mapper.createObjectNode()
                 .put("page", page)
                 .put("perPage", perPage);
-        variables.putArray("sort").add(sort);
-
-        if ("TAG".equals(mode) && filter != null && !filter.isBlank()) {
-            variables.put("tag", filter);
-        } else if (filter != null && !filter.isBlank()) {
-            variables.put("genre", filter);
-        }
+        if (useGenre) variables.put("genre", filter);
+        if (useTag) variables.put("tag", filter);
 
         String payload = mapper.createObjectNode()
                 .put("query", gql)
                 .set("variables", variables)
                 .toString();
 
-        return executeAnimeQuery(payload);
+        List<Anime> results = executePageQuery(payload);
+        if (results.isEmpty() && useTag && filter != null && !filter.isBlank()) {
+            // Alcuni tag di AniList sono più delicati dei generi: se il tag non rende risultati,
+            // faccio una ricerca testuale di fallback così la sezione non rimane vuota.
+            return search(filter, perPage);
+        }
+        return results;
     }
 
     private String animeFields() {
         return "id " +
+                "isAdult " +
                 "title { romaji english native } " +
                 "coverImage { extraLarge large medium color } " +
                 "episodes duration genres format status seasonYear season " +
@@ -103,21 +123,36 @@ public class AniListClient {
                 "studios(isMain: true) { nodes { name } } ";
     }
 
-    private List<Anime> executeAnimeQuery(String payload) throws IOException, InterruptedException {
-        HttpRequest req = createRequest(payload);
-        HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
-        if (resp.statusCode() != 200) throw new IOException("AniList API returned " + resp.statusCode());
+    private List<Anime> executePageQuery(String payload) throws IOException, InterruptedException {
+        HttpResponse<String> resp = client.send(createRequest(payload), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (resp.statusCode() != 200) {
+            throw new IOException("AniList HTTP " + resp.statusCode() + " - " + resp.body());
+        }
 
         JsonNode root = mapper.readTree(resp.body());
+        throwIfGraphQLError(root);
         JsonNode media = root.path("data").path("Page").path("media");
-        List<Anime> out = new ArrayList<>();
 
+        List<Anime> out = new ArrayList<>();
         if (media.isArray()) {
             for (JsonNode node : media) {
-                out.add(parseAnime(node));
+                Anime parsed = parseAnime(node);
+                if (parsed != null) out.add(parsed);
             }
         }
         return out;
+    }
+
+    private void throwIfGraphQLError(JsonNode root) throws IOException {
+        JsonNode errors = root.path("errors");
+        if (errors.isArray() && errors.size() > 0) {
+            StringBuilder message = new StringBuilder();
+            for (JsonNode error : errors) {
+                if (message.length() > 0) message.append(" | ");
+                message.append(error.path("message").asText("Errore GraphQL AniList"));
+            }
+            throw new IOException(message.toString());
+        }
     }
 
     private HttpRequest createRequest(String payload) {
@@ -126,8 +161,8 @@ public class AniListClient {
                 .timeout(Duration.ofSeconds(18))
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("Accept", "application/json")
-                .header("User-Agent", "MyAnimeDesk/0.3.6")
-                .POST(HttpRequest.BodyPublishers.ofString(payload))
+                .header("User-Agent", "MyAnimeDesk/0.3.7")
+                .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
                 .build();
     }
 
@@ -139,11 +174,11 @@ public class AniListClient {
         a.episodes = node.path("episodes").isMissingNode() || node.path("episodes").isNull() ? 0 : node.path("episodes").asInt(0);
         a.duration = node.path("duration").isMissingNode() || node.path("duration").isNull() ? 0 : node.path("duration").asInt(0);
 
-        if (node.has("genres")) {
-            List<String> g = new ArrayList<>();
-            for (JsonNode gn : node.path("genres")) g.add(gn.asText());
-            a.genres = g;
+        List<String> genres = new ArrayList<>();
+        if (node.has("genres") && node.path("genres").isArray()) {
+            for (JsonNode gn : node.path("genres")) genres.add(gn.asText());
         }
+        a.genres = genres;
 
         a.format = translateFormat(node.path("format").asText("N/D"));
         a.airingStatus = translateStatus(node.path("status").asText("UNKNOWN"));
