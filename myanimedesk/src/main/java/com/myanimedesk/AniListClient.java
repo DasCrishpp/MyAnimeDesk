@@ -12,6 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class AniListClient {
     private static final String API = "https://graphql.anilist.co";
@@ -19,6 +21,7 @@ public class AniListClient {
             .connectTimeout(Duration.ofSeconds(12))
             .build();
     private final ObjectMapper mapper = new ObjectMapper();
+    private final Map<String, List<Anime>> cache = new ConcurrentHashMap<>();
     // Filtro 18+ rimosso: il client mostra i risultati restituiti da AniList senza bloccarli.
     public void setHideAdultContent(boolean hideAdultContent) {
         // Metodo lasciato vuoto per compatibilità con vecchie versioni dell'interfaccia.
@@ -29,6 +32,9 @@ public class AniListClient {
     }
 
     public List<Anime> search(String query, int perPage) throws IOException, InterruptedException {
+        String cacheKey = "search:" + query.toLowerCase().trim() + ":" + perPage;
+        if (cache.containsKey(cacheKey)) return new ArrayList<>(cache.get(cacheKey));
+
         String gql = "query ($search: String, $perPage: Int) { " +
                 "Page(page: 1, perPage: $perPage) { " +
                 "media(search: $search, type: ANIME, sort: POPULARITY_DESC) { " +
@@ -44,7 +50,9 @@ public class AniListClient {
                 .set("variables", variables)
                 .toString();
 
-        return executePageQuery(payload);
+        List<Anime> results = executePageQuery(payload);
+        cache.put(cacheKey, new ArrayList<>(results));
+        return results;
     }
 
     public Anime getAnimeById(int id) throws IOException, InterruptedException {
@@ -59,7 +67,7 @@ public class AniListClient {
                 .set("variables", variables)
                 .toString();
 
-        HttpResponse<String> resp = client.send(createRequest(payload), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> resp = sendWithRetry(payload);
         if (resp.statusCode() != 200) {
             throw new IOException("AniList HTTP " + resp.statusCode() + " - " + resp.body());
         }
@@ -72,6 +80,9 @@ public class AniListClient {
     }
 
     public List<Anime> browse(String mode, String filter, int page, int perPage) throws IOException, InterruptedException {
+        String cacheKey = "browse:" + mode + ":" + filter + ":" + page + ":" + perPage;
+        if (cache.containsKey(cacheKey)) return new ArrayList<>(cache.get(cacheKey));
+
         String sort = "POPULARITY_DESC";
         if ("RECENT".equalsIgnoreCase(mode)) {
             sort = "START_DATE_DESC";
@@ -108,8 +119,9 @@ public class AniListClient {
         if (results.isEmpty() && useTag && filter != null && !filter.isBlank()) {
             // Alcuni tag di AniList sono più delicati dei generi: se il tag non rende risultati,
             // faccio una ricerca testuale di fallback così la sezione non rimane vuota.
-            return search(filter, perPage);
+            results = search(filter, perPage);
         }
+        cache.put(cacheKey, new ArrayList<>(results));
         return results;
     }
 
@@ -124,7 +136,7 @@ public class AniListClient {
     }
 
     private List<Anime> executePageQuery(String payload) throws IOException, InterruptedException {
-        HttpResponse<String> resp = client.send(createRequest(payload), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> resp = sendWithRetry(payload);
         if (resp.statusCode() != 200) {
             throw new IOException("AniList HTTP " + resp.statusCode() + " - " + resp.body());
         }
@@ -155,13 +167,34 @@ public class AniListClient {
         }
     }
 
+
+    private HttpResponse<String> sendWithRetry(String payload) throws IOException, InterruptedException {
+        IOException lastIo = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                HttpResponse<String> resp = client.send(createRequest(payload), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                if (resp.statusCode() != 429 && resp.statusCode() < 500) return resp;
+                if (attempt == 3) return resp;
+            } catch (IOException e) {
+                lastIo = e;
+                if (attempt == 3) throw e;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
+            }
+            Thread.sleep(500L * attempt);
+        }
+        if (lastIo != null) throw lastIo;
+        throw new IOException("Errore di rete sconosciuto con AniList");
+    }
+
     private HttpRequest createRequest(String payload) {
         return HttpRequest.newBuilder()
                 .uri(URI.create(API))
                 .timeout(Duration.ofSeconds(18))
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("Accept", "application/json")
-                .header("User-Agent", "MyAnimeDesk/0.3.7")
+                .header("User-Agent", "MyAnimeDesk/0.3.8")
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
                 .build();
     }
