@@ -6,7 +6,7 @@
 
   <groupId>com.myanimedesk</groupId>
   <artifactId>myanimedesk</artifactId>
-  <version>0.3.9</version>
+  <version>0.4.0</version>
 
   <name>myanimedesk</name>
   <!-- FIXME change it to the project's website -->
@@ -14,8 +14,8 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <maven.compiler.source>21</maven.compiler.source>
-    <maven.compiler.target>21</maven.compiler.target>
+    <maven.compiler.source>25</maven.compiler.source>
+    <maven.compiler.target>25</maven.compiler.target>
     <javafx.version>23.0.2</javafx.version>
     <javafx.platform>win</javafx.platform>
   </properties>
@@ -109,11 +109,11 @@
         </plugin>
         <plugin>
           <artifactId>maven-compiler-plugin</artifactId>
-          <version>3.8.0</version>
+          <version>3.14.0</version>
         </plugin>
         <plugin>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>2.22.1</version>
+          <version>3.5.2</version>
         </plugin>
         <plugin>
           <artifactId>maven-jar-plugin</artifactId>

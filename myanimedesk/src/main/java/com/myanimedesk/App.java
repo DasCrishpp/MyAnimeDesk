@@ -62,7 +62,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class App extends Application {
-    private static final String APP_VERSION = "0.3.9";
+    private static final String APP_VERSION = "0.4.0";
     private static final String RELEASES_URL = "https://github.com/DasCrishpp/MyAnimeDesk/releases";
     private static final String RELEASES_API = "https://api.github.com/repos/DasCrishpp/MyAnimeDesk/releases";
     private static final double SIDEBAR_WIDTH = 230;
@@ -77,33 +77,9 @@ public class App extends Application {
     private static final String DEFAULT_BACKGROUND_COLOR = "#160b2e";
     private static final String DEFAULT_ACCENT_COLOR = "#8b5cf6";
     private static final String CURRENT_CHANGELOG = """
-- Migliorato il caricamento iniziale dell’app con una schermata più moderna e informazioni sullo stato del caricamento
-- Aggiunto il caricamento iniziale dei dati principali della lista, della dashboard e della sezione Scopri
-- Migliorato il caricamento delle copertine degli anime nella lista, nella dashboard e nella sezione Scopri
-- Risolti diversi problemi legati alle copertine mancanti, lente o visualizzate in bassa qualità
-- Migliorata la cache delle immagini per rendere il caricamento più stabile e veloce
-- Aggiunta una barra di ricerca nella lista personale degli anime
-- Migliorata la posizione e l’integrazione della ricerca nella sezione “La mia lista”
-- Migliorata la sezione Scopri con un caricamento più stabile delle categorie e degli anime mostrati
-- Aggiunta la gestione dei casi in cui una ricerca non produce risultati
-- Sistemati pulsanti duplicati o non coerenti nella sezione Scopri/Ricerca
-- Migliorati i pulsanti flottanti “Torna a Scopri” e “Su”
-- Spostati i pulsanti flottanti in una posizione più comoda nell’interfaccia
-- Migliorata la gestione dei popup dei dettagli anime
-- Aggiunta la chiusura del popup dettagli cliccando fuori dal riquadro
-- Migliorato l’overlay dei popup, rendendolo più uniforme su tutta la finestra
-- Migliorato lo stile dei popup in base al tema scelto dall’utente
-- Migliorato il popup del changelog e dei controlli aggiornamenti
-- Aggiunto e migliorato il sistema di controllo aggiornamenti dall’app
-- Migliorata la gestione delle release GitHub, incluse le pre-release
-- Aggiunta la possibilità di salvare il colore o l’immagine scelta come sfondo anche dopo il riavvio dell’app
-- Migliorata la coerenza dei popup e degli elementi grafici con il tema selezionato
-- Aggiornato il tema predefinito con un viola più moderno e acceso
-- Il logo “MyAnimeDesk” nella sidebar ora segue il colore del tema scelto
-- Il pulsante “Cancella tutta la lista” rimane sempre rosso per essere più chiaro e riconoscibile
-- Migliorata la leggibilità generale di testi, card e pulsanti
-- Pulito codice inutilizzato e rimossi elementi non più necessari
-- Migliorata la stabilità generale dell’app dopo diversi bug fix e ottimizzazioni
+-  Migliorata schermata delle impostazioni
+-  Migliorata la gestione dei colori personalizzati
+-  Sistemati alcuni bug
 """;
 
     private final AniListClient client = new AniListClient();
@@ -1458,107 +1434,231 @@ public class App extends Application {
 
     // --- 4. IMPOSTAZIONI ---
     private void initSettingsPane() {
-        settingsPane = new VBox(24);
+        settingsPane = new VBox(22);
         settingsPane.setPadding(new Insets(10));
 
-        Label title = new Label("Impostazioni Generali");
+        HBox header = new HBox(16);
+        header.setAlignment(Pos.CENTER_LEFT);
+
+        VBox headerTexts = new VBox(4);
+        Label title = new Label("Impostazioni");
         title.setTextFill(Color.WHITE);
-        title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 26));
+        title.setFont(Font.font("Segoe UI", FontWeight.EXTRA_BOLD, 30));
 
-        VBox sectionUpdate = new VBox(10);
-        Label lblUpdate = new Label("Aggiornamenti");
-        lblUpdate.setTextFill(Color.web("#cbd5e1"));
-        lblUpdate.setFont(Font.font("Segoe UI", FontWeight.BOLD, 16));
+        Label subtitle = new Label("Personalizza MyAnimeDesk e gestisci i dati dell'app.");
+        subtitle.setTextFill(Color.web("#94a3b8"));
+        subtitle.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 13));
+        headerTexts.getChildren().addAll(title, subtitle);
 
-        Label versionLabel = new Label("Versione attuale: " + APP_VERSION);
-        versionLabel.setTextFill(Color.web("#94a3b8"));
-        versionLabel.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 13));
+        Region headerSpacer = new Region();
+        HBox.setHgrow(headerSpacer, Priority.ALWAYS);
 
+        Label versionBadge = createSettingsBadge("v" + APP_VERSION);
+        header.getChildren().addAll(headerTexts, headerSpacer, versionBadge);
+
+        GridPane settingsGrid = new GridPane();
+        settingsGrid.setHgap(18);
+        settingsGrid.setVgap(18);
+        settingsGrid.setMaxWidth(Double.MAX_VALUE);
+
+        ColumnConstraints col1 = new ColumnConstraints();
+        col1.setPercentWidth(50);
+        col1.setHgrow(Priority.ALWAYS);
+        ColumnConstraints col2 = new ColumnConstraints();
+        col2.setPercentWidth(50);
+        col2.setHgrow(Priority.ALWAYS);
+        settingsGrid.getColumnConstraints().addAll(col1, col2);
+
+        VBox updateCard = createSettingsCard(
+            "Aggiornamenti",
+            "Controlla se esiste una nuova versione disponibile su GitHub."
+        );
+        Label updateInfo = createSettingsMutedText("Versione installata: " + APP_VERSION);
         Button btnCheckUpdates = createSettingsButton("Controlla aggiornamenti");
         btnCheckUpdates.setOnAction(e -> checkForUpdates(true));
-        sectionUpdate.getChildren().addAll(lblUpdate, versionLabel, btnCheckUpdates);
+        updateCard.getChildren().addAll(updateInfo, btnCheckUpdates);
 
-        VBox sectionTheme = new VBox(10);
-        Label lblTheme = new Label("Aspetto e sfondo");
-        lblTheme.setTextFill(Color.web("#cbd5e1"));
-        lblTheme.setFont(Font.font("Segoe UI", FontWeight.BOLD, 16));
-
+        VBox themeCard = createSettingsCard(
+            "Aspetto",
+            "Scegli un colore o imposta un'immagine come sfondo dell'app."
+        );
         ColorPicker colorPicker = new ColorPicker(Color.web(currentBackgroundColor));
-        colorPicker.setStyle("-fx-background-color: #1e293b;");
+        colorPicker.setStyle(
+            "-fx-background-color: rgba(15,23,42,0.88);" +
+            "-fx-background-radius: 14;" +
+            "-fx-color-label-visible: false;" +
+            "-fx-cursor: hand;"
+        );
         colorPicker.setOnAction(e -> applySolidBackground(colorPicker.getValue()));
 
-        Button btnChooseBg = createSettingsButton("Scegli immagine come sfondo");
+        Button btnChooseBg = createSettingsButton("Scegli immagine");
         btnChooseBg.setOnAction(e -> chooseBackgroundImage());
 
-        Button btnResetBg = createSettingsButton("Ripristina sfondo predefinito");
+        Button btnResetBg = createSettingsButton("Sfondo predefinito");
         btnResetBg.setOnAction(e -> applySolidBackground(Color.web(DEFAULT_BACKGROUND_COLOR)));
 
-        HBox bgActions = new HBox(12, colorPicker, btnChooseBg, btnResetBg);
+        HBox bgActions = new HBox(10, colorPicker, btnChooseBg, btnResetBg);
         bgActions.setAlignment(Pos.CENTER_LEFT);
+        themeCard.getChildren().add(bgActions);
 
-        sectionTheme.getChildren().addAll(lblTheme, bgActions);
-
-        VBox sectionBackup = new VBox(12);
-        Label lblBackup = new Label("Backup e dati");
-        lblBackup.setTextFill(Color.web("#cbd5e1"));
-        lblBackup.setFont(Font.font("Segoe UI", FontWeight.BOLD, 16));
-
-        Button btnExport = createSettingsButton("Esporta Lista");
+        VBox dataCard = createSettingsCard(
+            "Backup e dati",
+            "Esporta, importa o elimina la tua libreria personale."
+        );
+        Button btnExport = createSettingsButton("Esporta lista");
         btnExport.setOnAction(e -> exportLibraryWithDialog());
 
-        Button btnImport = createSettingsButton("Importa Lista");
+        Button btnImport = createSettingsButton("Importa lista");
         btnImport.setOnAction(e -> importLibraryWithDialog());
 
         Button btnClear = createSettingsButtonDanger("Cancella tutta la lista");
         btnClear.setOnAction(e -> clearLibraryWithConfirm());
 
-        sectionBackup.getChildren().addAll(lblBackup, new HBox(14, btnExport, btnImport, btnClear));
-        settingsPane.getChildren().addAll(title, new Separator(), sectionUpdate, new Separator(), sectionTheme, new Separator(), sectionBackup);
+        HBox dataActions = new HBox(10, btnExport, btnImport, btnClear);
+        dataActions.setAlignment(Pos.CENTER_LEFT);
+        dataCard.getChildren().add(dataActions);
+
+        VBox infoCard = createSettingsCard(
+            "Informazioni app",
+            "Dati locali usati da MyAnimeDesk per cache, impostazioni e libreria."
+        );
+        Label appDirLabel = createSettingsMutedText("Cartella dati: " + APP_DIR.toString());
+        appDirLabel.setWrapText(true);
+        Label cacheLabel = createSettingsMutedText("Cache immagini e dati Scopri attiva per avvii più veloci.");
+        Button btnOpenReleases = createSettingsButton("Apri GitHub Releases");
+        btnOpenReleases.setOnAction(e -> openUrl(RELEASES_URL));
+        infoCard.getChildren().addAll(appDirLabel, cacheLabel, btnOpenReleases);
+
+        settingsGrid.add(updateCard, 0, 0);
+        settingsGrid.add(themeCard, 1, 0);
+        settingsGrid.add(dataCard, 0, 1);
+        settingsGrid.add(infoCard, 1, 1);
+
+        settingsPane.getChildren().addAll(header, settingsGrid);
+    }
+
+    private VBox createSettingsCard(String titleText, String subtitleText) {
+        VBox card = new VBox(13);
+        card.setPadding(new Insets(20));
+        card.setMinHeight(175);
+        card.setMaxWidth(Double.MAX_VALUE);
+        card.setStyle(
+            "-fx-background-color: rgba(7, 12, 28, 0.74);" +
+            "-fx-background-radius: 24;" +
+            "-fx-border-radius: 24;" +
+            "-fx-border-color: " + accentRgba(0.35) + ";" +
+            "-fx-border-width: 1;" +
+            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.28), 22, 0.18, 0, 8);"
+        );
+
+        Label title = new Label(titleText);
+        title.setTextFill(Color.WHITE);
+        title.setFont(Font.font("Segoe UI", FontWeight.EXTRA_BOLD, 18));
+
+        Label subtitle = createSettingsMutedText(subtitleText);
+        subtitle.setWrapText(true);
+
+        card.getChildren().addAll(title, subtitle);
+        return card;
+    }
+
+    private Label createSettingsMutedText(String text) {
+        Label label = new Label(text);
+        label.setTextFill(Color.web("#94a3b8"));
+        label.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 12.5));
+        return label;
+    }
+
+    private Label createSettingsBadge(String text) {
+        Label badge = new Label(text);
+        badge.setTextFill(Color.WHITE);
+        badge.setFont(Font.font("Segoe UI", FontWeight.EXTRA_BOLD, 13));
+        badge.setPadding(new Insets(7, 14, 7, 14));
+        badge.setStyle(
+            "-fx-background-color: linear-gradient(to right, " + currentAccentColor + ", #a855f7);" +
+            "-fx-background-radius: 999;" +
+            "-fx-border-radius: 999;" +
+            "-fx-border-color: " + accentRgba(0.75) + ";" +
+            "-fx-border-width: 1;" +
+            "-fx-effect: dropshadow(gaussian, " + accentRgba(0.35) + ", 14, 0.2, 0, 3);"
+        );
+        return badge;
     }
 
     private Button createSettingsButton(String text) {
         Button btn = new Button(text);
-        btn.setStyle("-fx-background-color: #1e293b; -fx-text-fill: white; -fx-background-radius: 12; -fx-padding: 9 16; -fx-cursor: hand; -fx-font-weight: bold;");
+        btn.setMinHeight(38);
+        btn.setFont(Font.font("Segoe UI", FontWeight.EXTRA_BOLD, 12.5));
+        btn.setStyle(
+            "-fx-background-color: rgba(15, 23, 42, 0.88);" +
+            "-fx-text-fill: white;" +
+            "-fx-background-radius: 14;" +
+            "-fx-border-radius: 14;" +
+            "-fx-border-color: " + accentRgba(0.30) + ";" +
+            "-fx-border-width: 1;" +
+            "-fx-padding: 9 15;" +
+            "-fx-cursor: hand;"
+        );
+        btn.setOnMouseEntered(e -> btn.setStyle(
+            "-fx-background-color: linear-gradient(to right, " + currentAccentColor + ", #7c3aed);" +
+            "-fx-text-fill: white;" +
+            "-fx-background-radius: 14;" +
+            "-fx-border-radius: 14;" +
+            "-fx-border-color: " + accentRgba(0.75) + ";" +
+            "-fx-border-width: 1;" +
+            "-fx-padding: 9 15;" +
+            "-fx-cursor: hand;" +
+            "-fx-effect: dropshadow(gaussian, " + accentRgba(0.35) + ", 14, 0.2, 0, 3);"
+        ));
+        btn.setOnMouseExited(e -> btn.setStyle(
+            "-fx-background-color: rgba(15, 23, 42, 0.88);" +
+            "-fx-text-fill: white;" +
+            "-fx-background-radius: 14;" +
+            "-fx-border-radius: 14;" +
+            "-fx-border-color: " + accentRgba(0.30) + ";" +
+            "-fx-border-width: 1;" +
+            "-fx-padding: 9 15;" +
+            "-fx-cursor: hand;"
+        ));
         return btn;
     }
 
     private Button createSettingsButtonDanger(String text) {
         Button btn = new Button(text);
+        btn.setMinHeight(38);
+        btn.setFont(Font.font("Segoe UI", FontWeight.EXTRA_BOLD, 12.5));
         btn.setStyle(
             "-fx-background-color: linear-gradient(to right, #dc2626, #ef4444);" +
             "-fx-text-fill: white;" +
-            "-fx-background-radius: 12;" +
-            "-fx-border-radius: 12;" +
-            "-fx-border-color: rgba(254,202,202,0.75);" +
+            "-fx-background-radius: 14;" +
+            "-fx-border-radius: 14;" +
+            "-fx-border-color: rgba(254,202,202,0.78);" +
             "-fx-border-width: 1;" +
-            "-fx-padding: 9 16;" +
+            "-fx-padding: 9 15;" +
             "-fx-cursor: hand;" +
-            "-fx-font-weight: bold;" +
-            "-fx-effect: dropshadow(gaussian, rgba(239,68,68,0.35), 12, 0.25, 0, 3);"
+            "-fx-effect: dropshadow(gaussian, rgba(239,68,68,0.35), 14, 0.25, 0, 3);"
         );
         btn.setOnMouseEntered(e -> btn.setStyle(
             "-fx-background-color: linear-gradient(to right, #b91c1c, #ef4444);" +
             "-fx-text-fill: white;" +
-            "-fx-background-radius: 12;" +
-            "-fx-border-radius: 12;" +
-            "-fx-border-color: rgba(254,202,202,0.9);" +
+            "-fx-background-radius: 14;" +
+            "-fx-border-radius: 14;" +
+            "-fx-border-color: rgba(254,202,202,0.95);" +
             "-fx-border-width: 1;" +
-            "-fx-padding: 9 16;" +
+            "-fx-padding: 9 15;" +
             "-fx-cursor: hand;" +
-            "-fx-font-weight: bold;" +
-            "-fx-effect: dropshadow(gaussian, rgba(239,68,68,0.55), 16, 0.25, 0, 4);"
+            "-fx-effect: dropshadow(gaussian, rgba(239,68,68,0.55), 18, 0.25, 0, 4);"
         ));
         btn.setOnMouseExited(e -> btn.setStyle(
             "-fx-background-color: linear-gradient(to right, #dc2626, #ef4444);" +
             "-fx-text-fill: white;" +
-            "-fx-background-radius: 12;" +
-            "-fx-border-radius: 12;" +
-            "-fx-border-color: rgba(254,202,202,0.75);" +
+            "-fx-background-radius: 14;" +
+            "-fx-border-radius: 14;" +
+            "-fx-border-color: rgba(254,202,202,0.78);" +
             "-fx-border-width: 1;" +
-            "-fx-padding: 9 16;" +
+            "-fx-padding: 9 15;" +
             "-fx-cursor: hand;" +
-            "-fx-font-weight: bold;" +
-            "-fx-effect: dropshadow(gaussian, rgba(239,68,68,0.35), 12, 0.25, 0, 3);"
+            "-fx-effect: dropshadow(gaussian, rgba(239,68,68,0.35), 14, 0.25, 0, 3);"
         ));
         return btn;
     }
@@ -1900,7 +2000,7 @@ public class App extends Application {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(normalizedUrl))
                 .timeout(java.time.Duration.ofSeconds(14))
-                .header("User-Agent", "MyAnimeDesk/0.3.9")
+                .header("User-Agent", "MyAnimeDesk/0.4.0")
                 .GET()
                 .build();
         HttpResponse<byte[]> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofByteArray());

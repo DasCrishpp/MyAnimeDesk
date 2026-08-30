@@ -1,0 +1,17 @@
+target/
+dist/
+dist_console/
+runtime/
+/MyAnimeDesk/
+*.exe
+*.jar
+*.log
+tmp_*.txt
+
+.github/
+.vscode/
+.idea/
+*.iml
+
+.DS_Store
+Thumbs.db

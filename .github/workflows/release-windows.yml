@@ -1,0 +1,121 @@
+name: Build and publish Windows release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build Windows application
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+          cache-dependency-path: myanimedesk/pom.xml
+
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Il tag deve avere il formato vX.Y.Z, per esempio v0.4.0."
+          }
+
+          [xml] $pom = Get-Content "myanimedesk/pom.xml"
+          $pomVersion = $pom.project.version
+          if ($pomVersion -ne $version) {
+            throw "La versione nel pom.xml ($pomVersion) non corrisponde al tag ($version)."
+          }
+
+          $appSource = Get-Content "myanimedesk/src/main/java/com/myanimedesk/App.java" -Raw
+          $versionMatch = [regex]::Match($appSource, 'APP_VERSION\s*=\s*"([^"]+)"')
+          if (-not $versionMatch.Success -or $versionMatch.Groups[1].Value -ne $version) {
+            throw "APP_VERSION in App.java non corrisponde al tag $version."
+          }
+
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+          "RELEASE_TAG=${{ github.ref_name }}" >> $env:GITHUB_ENV
+
+      - name: Compile and run tests
+        shell: pwsh
+        run: mvn --batch-mode --file myanimedesk/pom.xml clean package
+
+      - name: Create Windows application image
+        shell: pwsh
+        run: |
+          $jarName = "myanimedesk-$env:RELEASE_VERSION-jar-with-dependencies.jar"
+          $jarPath = "myanimedesk/target/$jarName"
+          if (-not (Test-Path -LiteralPath $jarPath)) {
+            throw "JAR non trovato: $jarPath"
+          }
+
+          New-Item -ItemType Directory -Path "release-input" -Force | Out-Null
+          New-Item -ItemType Directory -Path "release-output" -Force | Out-Null
+          Copy-Item -LiteralPath $jarPath -Destination "release-input/$jarName"
+
+          jpackage `
+            --type app-image `
+            --name MyAnimeDesk `
+            --description "MyAnimeDesk $env:RELEASE_VERSION" `
+            --app-version $env:RELEASE_VERSION `
+            --vendor "DasCrishpp" `
+            --input release-input `
+            --main-jar $jarName `
+            --main-class com.myanimedesk.App `
+            --icon myanimedesk/icon/MyAnimeDesk.ico `
+            --dest release-output `
+            --add-modules java.net.http,jdk.unsupported `
+            --java-options "--enable-native-access=ALL-UNNAMED" `
+            --java-options "--add-opens=jdk.unsupported/sun.misc=ALL-UNNAMED"
+
+          $versionedDirectory = "release-output/MyAnimeDesk-$env:RELEASE_VERSION"
+          Move-Item -LiteralPath "release-output/MyAnimeDesk" -Destination $versionedDirectory
+
+      - name: Smoke-test executable
+        shell: pwsh
+        run: |
+          $appDirectory = "release-output/MyAnimeDesk-$env:RELEASE_VERSION"
+          $executable = "$appDirectory/MyAnimeDesk.exe"
+          $process = Start-Process -FilePath $executable -WorkingDirectory $appDirectory -PassThru
+          Start-Sleep -Seconds 10
+          $process.Refresh()
+
+          if ($process.HasExited) {
+            throw "L'eseguibile si e chiuso durante il test con codice $($process.ExitCode)."
+          }
+
+          Stop-Process -Id $process.Id
+
+      - name: Create ZIP and checksum
+        shell: pwsh
+        run: |
+          $directory = "release-output/MyAnimeDesk-$env:RELEASE_VERSION"
+          $zip = "release-output/MyAnimeDesk-$env:RELEASE_VERSION.zip"
+          Compress-Archive -LiteralPath $directory -DestinationPath $zip -CompressionLevel Optimal
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+          "$hash  MyAnimeDesk-$env:RELEASE_VERSION.zip" |
+            Set-Content "release-output/MyAnimeDesk-$env:RELEASE_VERSION.zip.sha256"
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "release-output/MyAnimeDesk-$env:RELEASE_VERSION.zip"
+          $checksum = "$zip.sha256"
+          gh release create $env:RELEASE_TAG $zip $checksum `
+            --verify-tag `
+            --generate-notes `
+            --title "MyAnimeDesk $env:RELEASE_VERSION"
