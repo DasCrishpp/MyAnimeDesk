@@ -1,0 +1,11 @@
+# Configurazione locale di Visual Studio Code
+/.vscode/
+
+# Pacchetti ed eseguibili delle release (si allegano su GitHub Releases)
+/MyAnimeDesk-*/
+/MyAnimeDesk-*.zip
+
+# File temporanei creati durante build e diagnostica
+/.release-merge-worktree/
+/action-job*
+/wallpaper.local-backup.png
