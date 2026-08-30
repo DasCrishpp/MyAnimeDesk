@@ -3046,5 +3046,5 @@ public class App extends Application {
             Thread.currentThread().interrupt();
         }
     }
-
+// gabbo è arrivato qui ( sono gay )
 }
