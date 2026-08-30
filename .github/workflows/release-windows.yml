@@ -73,7 +73,7 @@ jobs:
             --vendor "DasCrishpp" `
             --input release-input `
             --main-jar $jarName `
-            --main-class com.myanimedesk.App `
+            --main-class com.myanimedesk.Launcher `
             --icon myanimedesk/icon/MyAnimeDesk.ico `
             --dest release-output `
             --add-modules java.net.http,jdk.unsupported `

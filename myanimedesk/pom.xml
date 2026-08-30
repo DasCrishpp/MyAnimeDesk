@@ -49,7 +49,7 @@
         <configuration>
           <archive>
             <manifest>
-              <mainClass>com.myanimedesk.App</mainClass>
+              <mainClass>com.myanimedesk.Launcher</mainClass>
             </manifest>
           </archive>
           <descriptorRefs>
@@ -79,7 +79,7 @@
               <finalName>${project.artifactId}-${project.version}-jar-with-dependencies</finalName>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                  <mainClass>com.myanimedesk.App</mainClass>
+                  <mainClass>com.myanimedesk.Launcher</mainClass>
                 </transformer>
               </transformers>
             </configuration>
@@ -91,7 +91,7 @@
         <artifactId>javafx-maven-plugin</artifactId>
         <version>0.0.8</version>
         <configuration>
-          <mainClass>com.myanimedesk.App</mainClass>
+          <mainClass>com.myanimedesk.Launcher</mainClass>
         </configuration>
       </plugin>
     </plugins>
