@@ -3,6 +3,9 @@ package com.myanimedesk;
 import javafx.animation.FadeTransition;
 import javafx.animation.PauseTransition;
 import javafx.animation.ScaleTransition;
+import javafx.animation.TranslateTransition;
+import javafx.animation.RotateTransition;
+import javafx.animation.ParallelTransition;
 import javafx.animation.Timeline;
 import javafx.animation.KeyFrame;
 import javafx.animation.KeyValue;
@@ -126,6 +129,7 @@ public class App extends Application {
     private ComboBox<String> libraryGenreCombo;
     private VBox advancedLibraryFilters;
     private boolean updatingLibraryGenreChoices = false;
+    private boolean animateNextLibraryRefresh = false;
 
     // Pop-up Modale dei Dettagli Estesi Estetico
     private StackPane detailOverlay;
@@ -918,6 +922,7 @@ public class App extends Application {
             btn.setOnAction(e -> {
                 playClickSound();
                 currentLibraryFilter = key;
+                animateNextLibraryRefresh = true;
                 refreshLibraryGrid();
             });
             filtersRow.getChildren().add(btn);
@@ -936,15 +941,19 @@ public class App extends Application {
         );
         librarySortCombo.setValue("Ordine predefinito");
         librarySortCombo.setPrefWidth(205);
+        librarySortCombo.setVisibleRowCount(6);
 
         libraryGenreCombo = new ComboBox<>();
         libraryGenreCombo.getItems().add("Tutti i generi");
         libraryGenreCombo.setValue("Tutti i generi");
         libraryGenreCombo.setPrefWidth(205);
+        libraryGenreCombo.setVisibleRowCount(8);
 
         String comboStyle = "-fx-background-color: #111b34; -fx-text-fill: white; -fx-background-radius: 10; -fx-border-radius: 10; -fx-border-color: rgba(148,163,184,0.28); -fx-padding: 3;";
         librarySortCombo.setStyle(comboStyle);
         libraryGenreCombo.setStyle(comboStyle);
+        configureLibraryFilterCombo(librarySortCombo);
+        configureLibraryFilterCombo(libraryGenreCombo);
 
         Label sortLabel = new Label("Ordina per");
         sortLabel.setTextFill(Color.web("#94a3b8"));
@@ -974,13 +983,20 @@ public class App extends Application {
             advancedLibraryFilters.setManaged(show);
             btnAdvancedFilters.setText(show ? "CHIUDI FILTRI" : "FILTRI");
         });
-        librarySortCombo.valueProperty().addListener((obs, oldValue, newValue) -> refreshLibraryGrid());
+        librarySortCombo.valueProperty().addListener((obs, oldValue, newValue) -> {
+            animateNextLibraryRefresh = true;
+            refreshLibraryGrid();
+        });
         libraryGenreCombo.valueProperty().addListener((obs, oldValue, newValue) -> {
-            if (!updatingLibraryGenreChoices) refreshLibraryGrid();
+            if (!updatingLibraryGenreChoices) {
+                animateNextLibraryRefresh = true;
+                refreshLibraryGrid();
+            }
         });
         resetAdvancedFilters.setOnAction(e -> {
             librarySortCombo.setValue("Ordine predefinito");
             libraryGenreCombo.setValue("Tutti i generi");
+            animateNextLibraryRefresh = true;
             refreshLibraryGrid();
         });
 
@@ -994,6 +1010,36 @@ public class App extends Application {
         scrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent; -fx-border-color: transparent;");
 
         libraryPane.getChildren().addAll(headerRow, filtersRow, advancedLibraryFilters, scrollPane);
+    }
+
+    private void configureLibraryFilterCombo(ComboBox<String> comboBox) {
+        comboBox.setCellFactory(list -> new ListCell<>() {
+            {
+                hoverProperty().addListener((obs, oldValue, newValue) -> applyFilterCellStyle());
+                selectedProperty().addListener((obs, oldValue, newValue) -> applyFilterCellStyle());
+            }
+
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? null : item);
+                applyFilterCellStyle();
+            }
+
+            private void applyFilterCellStyle() {
+                String background = isSelected() ? "#4338ca" : isHover() ? "#1e3a5f" : "#0f172a";
+                setStyle("-fx-background-color: " + background + "; -fx-text-fill: #f8fafc; -fx-padding: 9 12; -fx-font-size: 13px;");
+            }
+        });
+
+        comboBox.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? null : item);
+                setStyle("-fx-background-color: transparent; -fx-text-fill: #f8fafc; -fx-padding: 5 8; -fx-font-size: 13px; -fx-font-weight: bold;");
+            }
+        });
     }
 
     private void updateFilterButtonCounts() {
@@ -1051,6 +1097,8 @@ public class App extends Application {
 
     private void refreshLibraryGrid() {
         if (libraryGrid == null) return;
+        boolean animateCards = animateNextLibraryRefresh;
+        animateNextLibraryRefresh = false;
         libraryGrid.getChildren().clear();
         updateFilterButtonCounts();
         refreshLibraryGenreChoices();
@@ -1096,8 +1144,35 @@ public class App extends Application {
             emptyLbl.setFont(Font.font("Segoe UI", 16));
             libraryGrid.getChildren().add(emptyLbl);
         } else {
-            for (Anime a : sourceList) libraryGrid.getChildren().add(createAnimeGridCard(a));
+            for (int i = 0; i < sourceList.size(); i++) {
+                StackPane card = createAnimeGridCard(sourceList.get(i));
+                libraryGrid.getChildren().add(card);
+                if (animateCards) animateLibraryCardIn(card, i);
+            }
         }
+    }
+
+    private void animateLibraryCardIn(Node card, int index) {
+        card.setOpacity(0.0);
+        card.setTranslateY(16.0);
+        card.setScaleX(0.97);
+        card.setScaleY(0.97);
+
+        FadeTransition fade = new FadeTransition(Duration.millis(170), card);
+        fade.setFromValue(0.0);
+        fade.setToValue(1.0);
+        TranslateTransition slide = new TranslateTransition(Duration.millis(190), card);
+        slide.setFromY(16.0);
+        slide.setToY(0.0);
+        ScaleTransition scale = new ScaleTransition(Duration.millis(190), card);
+        scale.setFromX(0.97);
+        scale.setFromY(0.97);
+        scale.setToX(1.0);
+        scale.setToY(1.0);
+
+        ParallelTransition entrance = new ParallelTransition(fade, slide, scale);
+        entrance.setDelay(Duration.millis(Math.min(index * 38L, 380L)));
+        entrance.play();
     }
 
     // --- 3. RICERCA / SCOPRI ---
@@ -1854,6 +1929,7 @@ public class App extends Application {
         Button favoriteButton = new Button("♡");
         favoriteButton.setFocusTraversable(false);
         favoriteButton.setAccessibleText("Aggiungi ai preferiti");
+        configureFavoriteButtonMotion(favoriteButton);
 
         Runnable updateBaseStyle = () -> {
             Anime currentLocal = manager.all().stream().filter(x -> x.id == anime.id).findFirst().orElse(null);
@@ -1886,6 +1962,12 @@ public class App extends Application {
         poster.setPreserveRatio(false);
         setImageWithFallback(poster, anime.coverImage, 148, 210);
 
+        StackPane posterFrame = new StackPane(poster, favoriteButton);
+        posterFrame.setPrefSize(148, 210);
+        posterFrame.setMaxSize(148, 210);
+        StackPane.setAlignment(favoriteButton, Pos.TOP_RIGHT);
+        StackPane.setMargin(favoriteButton, new Insets(8, 8, 0, 0));
+
         Label title = new Label(anime.title != null ? anime.title : "Titolo sconosciuto");
         title.setTextFill(Color.web("#f8fafc"));
         title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 14));
@@ -1897,10 +1979,8 @@ public class App extends Application {
         smallMeta.setTextFill(Color.web("#93a4bd"));
         smallMeta.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 11));
 
-        baseLayer.getChildren().addAll(statusBadge, poster, title, smallMeta);
-        cardRoot.getChildren().addAll(baseLayer, favoriteButton);
-        StackPane.setAlignment(favoriteButton, Pos.TOP_RIGHT);
-        StackPane.setMargin(favoriteButton, new Insets(13, 13, 0, 0));
+        baseLayer.getChildren().addAll(statusBadge, posterFrame, title, smallMeta);
+        cardRoot.getChildren().add(baseLayer);
 
         Popup sidePopup = new Popup();
         sidePopup.setAutoHide(false);
@@ -1954,7 +2034,11 @@ public class App extends Application {
             sidePopup.hide();
             if (activeCardPopup == sidePopup) activeCardPopup = null;
             saveLibraryData(favorite ? "Aggiunto ai preferiti." : "Rimosso dai preferiti.");
-            refreshAllViews();
+            styleFavoriteButton(favoriteButton, favorite);
+            playFavoriteButtonPulse(favoriteButton);
+            PauseTransition refreshDelay = new PauseTransition(Duration.millis(190));
+            refreshDelay.setOnFinished(event -> refreshAllViews());
+            refreshDelay.play();
             e.consume();
         });
 
@@ -2032,21 +2116,62 @@ public class App extends Application {
         if (button == null) return;
         button.setText(favorite ? "♥" : "♡");
         button.setAccessibleText(favorite ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti");
-        String color = favorite ? "#fb7185" : "#e2e8f0";
-        String background = favorite ? "rgba(127,29,29,0.88)" : "rgba(15,23,42,0.86)";
+        button.setTooltip(new Tooltip(favorite ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"));
+        String color = favorite ? "white" : "#f8fafc";
+        String background = favorite
+            ? "linear-gradient(to bottom right, #fb7185, #e11d48)"
+            : "rgba(2,6,23,0.68)";
         button.setStyle(
             "-fx-background-color: " + background + ";" +
             "-fx-text-fill: " + color + ";" +
             "-fx-background-radius: 999;" +
             "-fx-border-radius: 999;" +
-            "-fx-border-color: rgba(255,255,255,0.28);" +
+            "-fx-border-color: rgba(255,255,255,0.46);" +
             "-fx-border-width: 1;" +
-            "-fx-font-size: 19px;" +
+            "-fx-font-size: 18px;" +
             "-fx-font-weight: bold;" +
-            "-fx-padding: 3 8;" +
+            "-fx-min-width: 36; -fx-min-height: 36;" +
+            "-fx-max-width: 36; -fx-max-height: 36;" +
+            "-fx-padding: 1;" +
             "-fx-cursor: hand;" +
-            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.45), 10, 0.18, 0, 3);"
+            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.58), 13, 0.22, 0, 4);"
         );
+    }
+
+    private void configureFavoriteButtonMotion(Button button) {
+        button.setOnMouseEntered(e -> animateFavoriteButton(button, 1.16, 7.0, 130));
+        button.setOnMouseExited(e -> animateFavoriteButton(button, 1.0, 0.0, 150));
+    }
+
+    private void animateFavoriteButton(Button button, double scaleValue, double rotateValue, double millis) {
+        ScaleTransition scale = new ScaleTransition(Duration.millis(millis), button);
+        scale.setToX(scaleValue);
+        scale.setToY(scaleValue);
+        RotateTransition rotate = new RotateTransition(Duration.millis(millis), button);
+        rotate.setToAngle(rotateValue);
+        new ParallelTransition(scale, rotate).play();
+    }
+
+    private void playFavoriteButtonPulse(Button button) {
+        ScaleTransition scale = new ScaleTransition(Duration.millis(105), button);
+        scale.setFromX(0.82);
+        scale.setFromY(0.82);
+        scale.setToX(1.28);
+        scale.setToY(1.28);
+        scale.setAutoReverse(true);
+        scale.setCycleCount(2);
+        RotateTransition rotate = new RotateTransition(Duration.millis(210), button);
+        rotate.setFromAngle(-8.0);
+        rotate.setToAngle(8.0);
+        rotate.setAutoReverse(true);
+        rotate.setCycleCount(2);
+        ParallelTransition pulse = new ParallelTransition(scale, rotate);
+        pulse.setOnFinished(e -> {
+            button.setScaleX(1.0);
+            button.setScaleY(1.0);
+            button.setRotate(0.0);
+        });
+        pulse.play();
     }
 
 
