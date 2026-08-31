@@ -934,6 +934,8 @@ public class App extends Application {
         librarySortCombo = new ComboBox<>();
         librarySortCombo.getItems().addAll(
             "Ordine predefinito",
+            "Titolo A-Z",
+            "Titolo Z-A",
             "Anime più recenti",
             "Anime meno recenti",
             "Più episodi",
@@ -941,7 +943,7 @@ public class App extends Application {
         );
         librarySortCombo.setValue("Ordine predefinito");
         librarySortCombo.setPrefWidth(205);
-        librarySortCombo.setVisibleRowCount(6);
+        librarySortCombo.setVisibleRowCount(7);
 
         libraryGenreCombo = new ComboBox<>();
         libraryGenreCombo.getItems().add("Tutti i generi");
@@ -1130,6 +1132,8 @@ public class App extends Application {
         String sortMode = librarySortCombo == null ? "Ordine predefinito" : librarySortCombo.getValue();
         if (sortMode != null) {
             switch (sortMode) {
+                case "Titolo A-Z" -> sourceList.sort(byTitle);
+                case "Titolo Z-A" -> sourceList.sort(byTitle.reversed());
                 case "Anime più recenti" -> sourceList.sort(Comparator.comparingInt(this::animeYear).reversed().thenComparing(byTitle));
                 case "Anime meno recenti" -> sourceList.sort(Comparator.comparingInt((Anime a) -> animeYear(a) <= 0 ? Integer.MAX_VALUE : animeYear(a)).thenComparing(byTitle));
                 case "Più episodi" -> sourceList.sort(Comparator.comparingInt((Anime a) -> a.episodes).reversed().thenComparing(byTitle));
