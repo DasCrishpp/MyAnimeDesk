@@ -210,9 +210,6 @@ public class App extends Application {
         });
     }
 
-    // --- SUONI UI DISATTIVATI ---
-    private void playClickSound() { }
-
     // --- SIDEBAR ---
     private VBox createSidebar() {
         VBox sidebar = new VBox(12);
@@ -237,10 +234,10 @@ public class App extends Application {
         Button btnSearch = createSidebarButton("Scopri / Cerca");
         Button btnSettings = createSidebarButton("Impostazioni");
 
-        btnDash.setOnAction(e -> { playClickSound(); selectMenuButton(btnDash); showView(dashboardPane); updateDashboardStats(); });
-        btnLib.setOnAction(e -> { playClickSound(); selectMenuButton(btnLib); showView(libraryPane); refreshLibraryGrid(); });
-        btnSearch.setOnAction(e -> { playClickSound(); selectMenuButton(btnSearch); showView(searchPane); });
-        btnSettings.setOnAction(e -> { playClickSound(); selectMenuButton(btnSettings); showView(settingsPane); });
+        btnDash.setOnAction(e -> { selectMenuButton(btnDash); showView(dashboardPane); updateDashboardStats(); });
+        btnLib.setOnAction(e -> { selectMenuButton(btnLib); showView(libraryPane); refreshLibraryGrid(); });
+        btnSearch.setOnAction(e -> { selectMenuButton(btnSearch); showView(searchPane); });
+        btnSettings.setOnAction(e -> { selectMenuButton(btnSettings); showView(settingsPane); });
 
         sidebar.getChildren().addAll(sidebarLogo, btnDash, btnLib, btnSearch, btnSettings);
         return sidebar;
@@ -920,7 +917,6 @@ public class App extends Application {
             Button btn = filterButtons[i];
             String key = filterKeys[i];
             btn.setOnAction(e -> {
-                playClickSound();
                 currentLibraryFilter = key;
                 animateNextLibraryRefresh = true;
                 refreshLibraryGrid();
