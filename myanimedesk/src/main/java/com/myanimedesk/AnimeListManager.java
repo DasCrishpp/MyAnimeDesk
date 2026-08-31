@@ -27,6 +27,26 @@ public class AnimeListManager {
         return library.stream().filter(x -> x.status == s).collect(Collectors.toList());
     }
 
+    public Anime findById(int animeId) {
+        return library.stream().filter(x -> x.id == animeId).findFirst().orElse(null);
+    }
+
+    public List<Anime> favorites() {
+        return library.stream().filter(x -> x.favorite).collect(Collectors.toList());
+    }
+
+    public boolean toggleFavorite(Anime anime) {
+        Anime stored = findById(anime.id);
+        if (stored == null) {
+            anime.favorite = true;
+            add(anime);
+            return true;
+        }
+        stored.favorite = !stored.favorite;
+        anime.favorite = stored.favorite;
+        return stored.favorite;
+    }
+
     public void updateStatus(int animeId, Anime.Status s) {
         for (Anime a : library) if (a.id == animeId) a.status = s;
     }
