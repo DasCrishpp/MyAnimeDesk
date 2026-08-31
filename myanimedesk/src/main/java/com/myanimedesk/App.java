@@ -3,6 +3,9 @@ package com.myanimedesk;
 import javafx.animation.FadeTransition;
 import javafx.animation.PauseTransition;
 import javafx.animation.ScaleTransition;
+import javafx.animation.TranslateTransition;
+import javafx.animation.RotateTransition;
+import javafx.animation.ParallelTransition;
 import javafx.animation.Timeline;
 import javafx.animation.KeyFrame;
 import javafx.animation.KeyValue;
@@ -23,6 +26,7 @@ import javafx.scene.image.WritableImage;
 import javafx.scene.image.PixelWriter;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
+import javafx.scene.input.ScrollEvent;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.stage.FileChooser;
@@ -55,6 +59,8 @@ import java.util.TimerTask;
 import java.util.Properties;
 import java.util.Map;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -118,7 +124,12 @@ public class App extends Application {
     private Timer searchDebounceTimer;
 
     // Filtri Lista con Contatori
-    private Button btnFilterAll, btnFilterWatching, btnFilterWatched, btnFilterToWatch, btnFilterDropped;
+    private Button btnFilterAll, btnFilterWatching, btnFilterWatched, btnFilterToWatch, btnFilterDropped, btnFilterFavorites;
+    private ComboBox<String> librarySortCombo;
+    private ComboBox<String> libraryGenreCombo;
+    private VBox advancedLibraryFilters;
+    private boolean updatingLibraryGenreChoices = false;
+    private boolean animateNextLibraryRefresh = false;
 
     // Pop-up Modale dei Dettagli Estesi Estetico
     private StackPane detailOverlay;
@@ -181,6 +192,7 @@ public class App extends Application {
 
         Scene scene = new Scene(appShell, 1280, 820);
         installModernScrollBarStyle(scene);
+        scene.addEventFilter(ScrollEvent.SCROLL, e -> hideActiveCardPopup());
         stage.setScene(scene);
         stage.setOnCloseRequest(e -> shutdownBackgroundWork());
         stage.show();
@@ -871,7 +883,7 @@ public class App extends Application {
         }
     }
 
-    // --- 2. LA MIA LISTA (FILTRI E CONTATORI ALLINEATI AD ANIME.JAVA) ---
+    // --- 2. LA MIA LISTA ---
     private void initLibraryPane() {
         libraryPane = new VBox(18);
         
@@ -891,28 +903,102 @@ public class App extends Application {
         HBox headerRow = new HBox(14, title, headerSpacer, librarySearchField);
         headerRow.setAlignment(Pos.CENTER_LEFT);
 
-        HBox filtersRow = new HBox(10);
+        FlowPane filtersRow = new FlowPane(10, 10);
         
         btnFilterAll = new Button("TUTTI (0)");
         btnFilterWatching = new Button("IN VISIONE (0)");
-        btnFilterWatched = new Button("VISTI (0)"); // Sincronizzato con il tuo Anime.java ("Visti")
+        btnFilterWatched = new Button("VISTI (0)");
         btnFilterToWatch = new Button("DA VEDERE (0)");
         btnFilterDropped = new Button("DROPPATO (0)");
+        btnFilterFavorites = new Button("♥ PREFERITI (0)");
+        Button btnAdvancedFilters = new Button("FILTRI");
 
-        Button[] filterButtons = {btnFilterAll, btnFilterWatching, btnFilterWatched, btnFilterToWatch, btnFilterDropped};
-        String[] filterKeys = {"TUTTI", "IN VISIONE", "VISTI", "DA VEDERE", "DROPPATO"};
+        Button[] filterButtons = {btnFilterAll, btnFilterWatching, btnFilterWatched, btnFilterToWatch, btnFilterDropped, btnFilterFavorites};
+        String[] filterKeys = {"TUTTI", "IN VISIONE", "VISTI", "DA VEDERE", "DROPPATO", "PREFERITI"};
 
         for (int i = 0; i < filterButtons.length; i++) {
             Button btn = filterButtons[i];
             String key = filterKeys[i];
-            btn.setStyle("-fx-background-color: rgba(30, 41, 74, 0.8); -fx-text-fill: #cbd5e1; -fx-background-radius: 20; -fx-padding: 8 16; -fx-cursor: hand; -fx-font-weight: bold;");
             btn.setOnAction(e -> {
                 playClickSound();
                 currentLibraryFilter = key;
+                animateNextLibraryRefresh = true;
                 refreshLibraryGrid();
             });
             filtersRow.getChildren().add(btn);
         }
+
+        btnAdvancedFilters.setStyle("-fx-background-color: rgba(99,102,241,0.22); -fx-text-fill: #c7d2fe; -fx-background-radius: 20; -fx-border-radius: 20; -fx-border-color: rgba(129,140,248,0.5); -fx-padding: 8 16; -fx-cursor: hand; -fx-font-weight: bold;");
+        filtersRow.getChildren().add(btnAdvancedFilters);
+
+        librarySortCombo = new ComboBox<>();
+        librarySortCombo.getItems().addAll(
+            "Ordine predefinito",
+            "Anime più recenti",
+            "Anime meno recenti",
+            "Più episodi",
+            "Meno episodi"
+        );
+        librarySortCombo.setValue("Ordine predefinito");
+        librarySortCombo.setPrefWidth(205);
+        librarySortCombo.setVisibleRowCount(6);
+
+        libraryGenreCombo = new ComboBox<>();
+        libraryGenreCombo.getItems().add("Tutti i generi");
+        libraryGenreCombo.setValue("Tutti i generi");
+        libraryGenreCombo.setPrefWidth(205);
+        libraryGenreCombo.setVisibleRowCount(8);
+
+        String comboStyle = "-fx-background-color: #111b34; -fx-text-fill: white; -fx-background-radius: 10; -fx-border-radius: 10; -fx-border-color: rgba(148,163,184,0.28); -fx-padding: 3;";
+        librarySortCombo.setStyle(comboStyle);
+        libraryGenreCombo.setStyle(comboStyle);
+        configureLibraryFilterCombo(librarySortCombo);
+        configureLibraryFilterCombo(libraryGenreCombo);
+
+        Label sortLabel = new Label("Ordina per");
+        sortLabel.setTextFill(Color.web("#94a3b8"));
+        sortLabel.setFont(Font.font("Segoe UI", FontWeight.BOLD, 11));
+        Label genreLabel = new Label("Genere");
+        genreLabel.setTextFill(Color.web("#94a3b8"));
+        genreLabel.setFont(Font.font("Segoe UI", FontWeight.BOLD, 11));
+
+        VBox sortBox = new VBox(5, sortLabel, librarySortCombo);
+        VBox genreBox = new VBox(5, genreLabel, libraryGenreCombo);
+        Button resetAdvancedFilters = new Button("Resetta filtri avanzati");
+        resetAdvancedFilters.setStyle("-fx-background-color: rgba(239,68,68,0.16); -fx-text-fill: #fecaca; -fx-background-radius: 10; -fx-border-radius: 10; -fx-border-color: rgba(248,113,113,0.38); -fx-padding: 9 14; -fx-cursor: hand; -fx-font-weight: bold;");
+
+        Region advancedSpacer = new Region();
+        HBox.setHgrow(advancedSpacer, Priority.ALWAYS);
+        HBox advancedControls = new HBox(14, sortBox, genreBox, advancedSpacer, resetAdvancedFilters);
+        advancedControls.setAlignment(Pos.BOTTOM_LEFT);
+        advancedLibraryFilters = new VBox(advancedControls);
+        advancedLibraryFilters.setPadding(new Insets(13));
+        advancedLibraryFilters.setStyle("-fx-background-color: rgba(15,23,42,0.82); -fx-background-radius: 14; -fx-border-radius: 14; -fx-border-color: rgba(129,140,248,0.24);");
+        advancedLibraryFilters.setVisible(false);
+        advancedLibraryFilters.setManaged(false);
+
+        btnAdvancedFilters.setOnAction(e -> {
+            boolean show = !advancedLibraryFilters.isVisible();
+            advancedLibraryFilters.setVisible(show);
+            advancedLibraryFilters.setManaged(show);
+            btnAdvancedFilters.setText(show ? "CHIUDI FILTRI" : "FILTRI");
+        });
+        librarySortCombo.valueProperty().addListener((obs, oldValue, newValue) -> {
+            animateNextLibraryRefresh = true;
+            refreshLibraryGrid();
+        });
+        libraryGenreCombo.valueProperty().addListener((obs, oldValue, newValue) -> {
+            if (!updatingLibraryGenreChoices) {
+                animateNextLibraryRefresh = true;
+                refreshLibraryGrid();
+            }
+        });
+        resetAdvancedFilters.setOnAction(e -> {
+            librarySortCombo.setValue("Ordine predefinito");
+            libraryGenreCombo.setValue("Tutti i generi");
+            animateNextLibraryRefresh = true;
+            refreshLibraryGrid();
+        });
 
         libraryGrid = new TilePane();
         libraryGrid.setHgap(10); // Compatto e ravvicinato
@@ -923,7 +1009,37 @@ public class App extends Application {
         scrollPane.setFitToWidth(true);
         scrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent; -fx-border-color: transparent;");
 
-        libraryPane.getChildren().addAll(headerRow, filtersRow, scrollPane);
+        libraryPane.getChildren().addAll(headerRow, filtersRow, advancedLibraryFilters, scrollPane);
+    }
+
+    private void configureLibraryFilterCombo(ComboBox<String> comboBox) {
+        comboBox.setCellFactory(list -> new ListCell<>() {
+            {
+                hoverProperty().addListener((obs, oldValue, newValue) -> applyFilterCellStyle());
+                selectedProperty().addListener((obs, oldValue, newValue) -> applyFilterCellStyle());
+            }
+
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? null : item);
+                applyFilterCellStyle();
+            }
+
+            private void applyFilterCellStyle() {
+                String background = isSelected() ? "#4338ca" : isHover() ? "#1e3a5f" : "#0f172a";
+                setStyle("-fx-background-color: " + background + "; -fx-text-fill: #f8fafc; -fx-padding: 9 12; -fx-font-size: 13px;");
+            }
+        });
+
+        comboBox.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? null : item);
+                setStyle("-fx-background-color: transparent; -fx-text-fill: #f8fafc; -fx-padding: 5 8; -fx-font-size: 13px; -fx-font-weight: bold;");
+            }
+        });
     }
 
     private void updateFilterButtonCounts() {
@@ -933,19 +1049,75 @@ public class App extends Application {
         btnFilterWatched.setText("VISTI (" + getByStatus(Anime.Status.WATCHED).size() + ")");
         btnFilterToWatch.setText("DA VEDERE (" + getByStatus(Anime.Status.TO_WATCH).size() + ")");
         btnFilterDropped.setText("DROPPATO (" + getByStatus(Anime.Status.DROPPED).size() + ")");
+        btnFilterFavorites.setText("♥ PREFERITI (" + manager.favorites().size() + ")");
+        updateLibraryFilterButtonStyles();
+    }
+
+    private void updateLibraryFilterButtonStyles() {
+        Button[] buttons = {btnFilterAll, btnFilterWatching, btnFilterWatched, btnFilterToWatch, btnFilterDropped, btnFilterFavorites};
+        String[] keys = {"TUTTI", "IN VISIONE", "VISTI", "DA VEDERE", "DROPPATO", "PREFERITI"};
+        for (int i = 0; i < buttons.length; i++) {
+            if (buttons[i] == null) continue;
+            boolean selected = keys[i].equals(currentLibraryFilter);
+            String background = selected ? currentAccentColor : "rgba(30,41,74,0.8)";
+            String text = selected ? "white" : "#cbd5e1";
+            buttons[i].setStyle("-fx-background-color: " + background + "; -fx-text-fill: " + text + "; -fx-background-radius: 20; -fx-padding: 8 16; -fx-cursor: hand; -fx-font-weight: bold;");
+        }
+    }
+
+    private void refreshLibraryGenreChoices() {
+        if (libraryGenreCombo == null) return;
+        String selected = libraryGenreCombo.getValue();
+        TreeSet<String> genres = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        for (Anime anime : manager.all()) {
+            if (anime.genres == null) continue;
+            for (String genre : anime.genres) {
+                if (genre != null && !genre.isBlank()) genres.add(genre.trim());
+            }
+        }
+
+        List<String> choices = new ArrayList<>();
+        choices.add("Tutti i generi");
+        choices.addAll(genres);
+        if (!new ArrayList<>(libraryGenreCombo.getItems()).equals(choices)) {
+            updatingLibraryGenreChoices = true;
+            libraryGenreCombo.getItems().setAll(choices);
+            libraryGenreCombo.setValue(selected != null && choices.contains(selected) ? selected : "Tutti i generi");
+            updatingLibraryGenreChoices = false;
+        }
+    }
+
+    private int animeYear(Anime anime) {
+        if (anime == null || anime.year == null) return 0;
+        String digits = anime.year.replaceAll("[^0-9]", "");
+        if (digits.length() > 4) digits = digits.substring(0, 4);
+        try { return digits.isBlank() ? 0 : Integer.parseInt(digits); }
+        catch (NumberFormatException e) { return 0; }
     }
 
     private void refreshLibraryGrid() {
+        if (libraryGrid == null) return;
+        boolean animateCards = animateNextLibraryRefresh;
+        animateNextLibraryRefresh = false;
         libraryGrid.getChildren().clear();
-        updateFilterButtonCounts(); 
+        updateFilterButtonCounts();
+        refreshLibraryGenreChoices();
 
         List<Anime> sourceList = switch (currentLibraryFilter) {
             case "IN VISIONE" -> getByStatus(Anime.Status.WATCHING);
             case "VISTI" -> getByStatus(Anime.Status.WATCHED);
             case "DA VEDERE" -> getByStatus(Anime.Status.TO_WATCH);
             case "DROPPATO" -> getByStatus(Anime.Status.DROPPED);
+            case "PREFERITI" -> manager.favorites();
             default -> manager.all();
         };
+
+        String selectedGenre = libraryGenreCombo == null ? "Tutti i generi" : libraryGenreCombo.getValue();
+        if (selectedGenre != null && !selectedGenre.equals("Tutti i generi")) {
+            sourceList = sourceList.stream()
+                .filter(a -> a.genres != null && a.genres.stream().anyMatch(g -> g != null && g.equalsIgnoreCase(selectedGenre)))
+                .collect(Collectors.toList());
+        }
 
         String libraryQuery = librarySearchField == null ? "" : librarySearchField.getText().trim().toLowerCase();
         if (!libraryQuery.isBlank()) {
@@ -954,14 +1126,53 @@ public class App extends Application {
                 .collect(Collectors.toList());
         }
 
+        Comparator<Anime> byTitle = Comparator.comparing(a -> a.title == null ? "" : a.title, String.CASE_INSENSITIVE_ORDER);
+        String sortMode = librarySortCombo == null ? "Ordine predefinito" : librarySortCombo.getValue();
+        if (sortMode != null) {
+            switch (sortMode) {
+                case "Anime più recenti" -> sourceList.sort(Comparator.comparingInt(this::animeYear).reversed().thenComparing(byTitle));
+                case "Anime meno recenti" -> sourceList.sort(Comparator.comparingInt((Anime a) -> animeYear(a) <= 0 ? Integer.MAX_VALUE : animeYear(a)).thenComparing(byTitle));
+                case "Più episodi" -> sourceList.sort(Comparator.comparingInt((Anime a) -> a.episodes).reversed().thenComparing(byTitle));
+                case "Meno episodi" -> sourceList.sort(Comparator.comparingInt((Anime a) -> a.episodes <= 0 ? Integer.MAX_VALUE : a.episodes).thenComparing(byTitle));
+                default -> { }
+            }
+        }
+
         if (sourceList.isEmpty()) {
             Label emptyLbl = new Label("Nessun anime trovato.");
             emptyLbl.setTextFill(Color.GRAY);
             emptyLbl.setFont(Font.font("Segoe UI", 16));
             libraryGrid.getChildren().add(emptyLbl);
         } else {
-            for (Anime a : sourceList) libraryGrid.getChildren().add(createAnimeGridCard(a));
+            for (int i = 0; i < sourceList.size(); i++) {
+                StackPane card = createAnimeGridCard(sourceList.get(i));
+                libraryGrid.getChildren().add(card);
+                if (animateCards) animateLibraryCardIn(card, i);
+            }
         }
+    }
+
+    private void animateLibraryCardIn(Node card, int index) {
+        card.setOpacity(0.0);
+        card.setTranslateY(16.0);
+        card.setScaleX(0.97);
+        card.setScaleY(0.97);
+
+        FadeTransition fade = new FadeTransition(Duration.millis(170), card);
+        fade.setFromValue(0.0);
+        fade.setToValue(1.0);
+        TranslateTransition slide = new TranslateTransition(Duration.millis(190), card);
+        slide.setFromY(16.0);
+        slide.setToY(0.0);
+        ScaleTransition scale = new ScaleTransition(Duration.millis(190), card);
+        scale.setFromX(0.97);
+        scale.setFromY(0.97);
+        scale.setToX(1.0);
+        scale.setToY(1.0);
+
+        ParallelTransition entrance = new ParallelTransition(fade, slide, scale);
+        entrance.setDelay(Duration.millis(Math.min(index * 38L, 380L)));
+        entrance.play();
     }
 
     // --- 3. RICERCA / SCOPRI ---
@@ -1715,11 +1926,17 @@ public class App extends Application {
         statusBadge.setPadding(new Insets(4, 7, 4, 7));
         statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white;");
 
+        Button favoriteButton = new Button("♡");
+        favoriteButton.setFocusTraversable(false);
+        favoriteButton.setAccessibleText("Aggiungi ai preferiti");
+        configureFavoriteButtonMotion(favoriteButton);
+
         Runnable updateBaseStyle = () -> {
             Anime currentLocal = manager.all().stream().filter(x -> x.id == anime.id).findFirst().orElse(null);
             String borderAccent = "#223254";
             if (currentLocal != null) {
                 anime.status = currentLocal.status;
+                anime.favorite = currentLocal.favorite;
                 switch (currentLocal.status) {
                     case WATCHING -> { borderAccent = "#ff9f43"; statusBadge.setText("IN VISIONE"); statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white; -fx-background-color: #ff9f43;"); }
                     case WATCHED -> { borderAccent = "#1dd1a1"; statusBadge.setText("VISTO"); statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white; -fx-background-color: #1dd1a1;"); }
@@ -1728,9 +1945,11 @@ public class App extends Application {
                 }
             } else {
                 anime.status = Anime.Status.TO_WATCH;
+                anime.favorite = false;
                 statusBadge.setText("NON IN LISTA");
                 statusBadge.setStyle("-fx-background-radius: 999; -fx-text-fill: white; -fx-background-color: #475569;");
             }
+            styleFavoriteButton(favoriteButton, anime.favorite);
             baseLayer.setStyle("-fx-background-color: rgba(15,23,42,0.88); -fx-background-radius: 16; -fx-border-radius: 16; -fx-border-color: " + borderAccent + "; -fx-border-width: 1.6; -fx-cursor: hand; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.24), 12, 0.16, 0, 4);");
         };
         updateBaseStyle.run();
@@ -1743,6 +1962,12 @@ public class App extends Application {
         poster.setPreserveRatio(false);
         setImageWithFallback(poster, anime.coverImage, 148, 210);
 
+        StackPane posterFrame = new StackPane(poster, favoriteButton);
+        posterFrame.setPrefSize(148, 210);
+        posterFrame.setMaxSize(148, 210);
+        StackPane.setAlignment(favoriteButton, Pos.TOP_RIGHT);
+        StackPane.setMargin(favoriteButton, new Insets(8, 8, 0, 0));
+
         Label title = new Label(anime.title != null ? anime.title : "Titolo sconosciuto");
         title.setTextFill(Color.web("#f8fafc"));
         title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 14));
@@ -1754,7 +1979,7 @@ public class App extends Application {
         smallMeta.setTextFill(Color.web("#93a4bd"));
         smallMeta.setFont(Font.font("Segoe UI", FontWeight.SEMI_BOLD, 11));
 
-        baseLayer.getChildren().addAll(statusBadge, poster, title, smallMeta);
+        baseLayer.getChildren().addAll(statusBadge, posterFrame, title, smallMeta);
         cardRoot.getChildren().add(baseLayer);
 
         Popup sidePopup = new Popup();
@@ -1804,6 +2029,19 @@ public class App extends Application {
         else popupContent.getChildren().addAll(hoverInfo, new Separator(), quickAddMenu);
         sidePopup.getContent().add(popupContent);
 
+        favoriteButton.setOnAction(e -> {
+            boolean favorite = manager.toggleFavorite(anime);
+            sidePopup.hide();
+            if (activeCardPopup == sidePopup) activeCardPopup = null;
+            saveLibraryData(favorite ? "Aggiunto ai preferiti." : "Rimosso dai preferiti.");
+            styleFavoriteButton(favoriteButton, favorite);
+            playFavoriteButtonPulse(favoriteButton);
+            PauseTransition refreshDelay = new PauseTransition(Duration.millis(190));
+            refreshDelay.setOnFinished(event -> refreshAllViews());
+            refreshDelay.play();
+            e.consume();
+        });
+
         PauseTransition showDelay = new PauseTransition(Duration.millis(280));
         PauseTransition hideDelay = new PauseTransition(Duration.millis(80));
         hideDelay.setOnFinished(evt -> {
@@ -1838,6 +2076,7 @@ public class App extends Application {
             hideDelay.stop();
             showDelay.playFromStart();
             baseLayer.toFront();
+            favoriteButton.toFront();
             ScaleTransition st = new ScaleTransition(Duration.millis(150), baseLayer);
             st.setToX(1.035);
             st.setToY(1.035);
@@ -1855,6 +2094,13 @@ public class App extends Application {
         });
         popupContent.setOnMouseEntered(e -> { hideDelay.stop(); showDelay.stop(); });
         popupContent.setOnMouseExited(e -> hideDelay.playFromStart());
+        popupContent.addEventFilter(ScrollEvent.SCROLL, e -> {
+            showDelay.stop();
+            hideDelay.stop();
+            sidePopup.hide();
+            if (activeCardPopup == sidePopup) activeCardPopup = null;
+            e.consume();
+        });
 
         cardRoot.setOnMouseClicked(e -> {
             hideSuggestionPopupCompletely();
@@ -1864,6 +2110,68 @@ public class App extends Application {
         });
 
         return cardRoot;
+    }
+
+    private void styleFavoriteButton(Button button, boolean favorite) {
+        if (button == null) return;
+        button.setText(favorite ? "♥" : "♡");
+        button.setAccessibleText(favorite ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti");
+        button.setTooltip(new Tooltip(favorite ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"));
+        String color = favorite ? "white" : "#f8fafc";
+        String background = favorite
+            ? "linear-gradient(to bottom right, #fb7185, #e11d48)"
+            : "rgba(2,6,23,0.68)";
+        button.setStyle(
+            "-fx-background-color: " + background + ";" +
+            "-fx-text-fill: " + color + ";" +
+            "-fx-background-radius: 999;" +
+            "-fx-border-radius: 999;" +
+            "-fx-border-color: rgba(255,255,255,0.46);" +
+            "-fx-border-width: 1;" +
+            "-fx-font-size: 18px;" +
+            "-fx-font-weight: bold;" +
+            "-fx-min-width: 36; -fx-min-height: 36;" +
+            "-fx-max-width: 36; -fx-max-height: 36;" +
+            "-fx-padding: 1;" +
+            "-fx-cursor: hand;" +
+            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.58), 13, 0.22, 0, 4);"
+        );
+    }
+
+    private void configureFavoriteButtonMotion(Button button) {
+        button.setOnMouseEntered(e -> animateFavoriteButton(button, 1.16, 7.0, 130));
+        button.setOnMouseExited(e -> animateFavoriteButton(button, 1.0, 0.0, 150));
+    }
+
+    private void animateFavoriteButton(Button button, double scaleValue, double rotateValue, double millis) {
+        ScaleTransition scale = new ScaleTransition(Duration.millis(millis), button);
+        scale.setToX(scaleValue);
+        scale.setToY(scaleValue);
+        RotateTransition rotate = new RotateTransition(Duration.millis(millis), button);
+        rotate.setToAngle(rotateValue);
+        new ParallelTransition(scale, rotate).play();
+    }
+
+    private void playFavoriteButtonPulse(Button button) {
+        ScaleTransition scale = new ScaleTransition(Duration.millis(105), button);
+        scale.setFromX(0.82);
+        scale.setFromY(0.82);
+        scale.setToX(1.28);
+        scale.setToY(1.28);
+        scale.setAutoReverse(true);
+        scale.setCycleCount(2);
+        RotateTransition rotate = new RotateTransition(Duration.millis(210), button);
+        rotate.setFromAngle(-8.0);
+        rotate.setToAngle(8.0);
+        rotate.setAutoReverse(true);
+        rotate.setCycleCount(2);
+        ParallelTransition pulse = new ParallelTransition(scale, rotate);
+        pulse.setOnFinished(e -> {
+            button.setScaleX(1.0);
+            button.setScaleY(1.0);
+            button.setRotate(0.0);
+        });
+        pulse.play();
     }
 
 

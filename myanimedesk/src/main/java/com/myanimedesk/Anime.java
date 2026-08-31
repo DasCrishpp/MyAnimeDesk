@@ -10,6 +10,7 @@ public class Anime {
     public int duration;
     public List<String> genres;
     public Status status = Status.TO_WATCH;
+    public boolean favorite = false;
     
     // Nuovi campi reali richiesti per le info estese
     public String format;        // es. TV, MOVIE, OVA
