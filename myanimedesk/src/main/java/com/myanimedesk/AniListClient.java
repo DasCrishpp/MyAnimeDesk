@@ -13,15 +13,35 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.nio.file.*;
+import java.security.MessageDigest;
+import java.util.HexFormat;
+import java.util.Arrays;
 
-public class AniListClient {
+public class AniListClient implements AutoCloseable {
     private static final String API = "https://graphql.anilist.co";
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(12))
             .build();
     private final ObjectMapper mapper = new ObjectMapper();
-    private final Map<String, List<Anime>> cache = new ConcurrentHashMap<>();
+    private final Path profile;
+    private final URI endpoint;
+    private final JikanClient jikan;
+    private final KitsuClient fallback;
+    private volatile boolean offline;
+    private volatile long retryAfter;
+    public AniListClient() { this(Path.of(System.getProperty("user.home"), ".myanimedesk")); }
+    AniListClient(Path profile) { this(profile, URI.create(API)); }
+    AniListClient(Path profile, URI endpoint) {
+        this.profile = profile; this.endpoint = endpoint;
+        this.jikan = new JikanClient(profile); this.fallback = new KitsuClient(profile);
+    }
+    public boolean isOffline() { return offline; }
+    private final Map<String, List<Anime>> cache = Collections.synchronizedMap(new LinkedHashMap<>(64, .75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<String, List<Anime>> entry) { return size() > 64; }
+    });
     // Filtro 18+ rimosso: il client mostra i risultati restituiti da AniList senza bloccarli.
     public void setHideAdultContent(boolean hideAdultContent) {
         // Metodo lasciato vuoto per compatibilità con vecchie versioni dell'interfaccia.
@@ -33,7 +53,8 @@ public class AniListClient {
 
     public List<Anime> search(String query, int perPage) throws IOException, InterruptedException {
         String cacheKey = "search:" + query.toLowerCase().trim() + ":" + perPage;
-        if (cache.containsKey(cacheKey)) return new ArrayList<>(cache.get(cacheKey));
+        List<Anime> cached = cache.get(cacheKey);
+        if (cached != null) return new ArrayList<>(cached);
 
         String gql = "query ($search: String, $perPage: Int) { " +
                 "Page(page: 1, perPage: $perPage) { " +
@@ -50,15 +71,43 @@ public class AniListClient {
                 .set("variables", variables)
                 .toString();
 
-        List<Anime> results = executePageQuery(payload);
+        List<Anime> results;
+        try { results = executePageQuery(payload); }
+        catch (IOException failure) {
+            try { results = fallback.search(query, perPage); }
+            catch (IOException secondary) { failure.addSuppressed(secondary); results = jikan.search(query, perPage); }
+            offline = false;
+        }
         cache.put(cacheKey, new ArrayList<>(results));
         return results;
+    }
+
+    /** Loads details from AniList, then transparently uses Jikan/MyAnimeList if needed. */
+    public Anime getAnimeDetails(Anime anime) throws IOException, InterruptedException {
+        if (anime == null) return null;
+        if ("KITSU".equalsIgnoreCase(anime.provider)) return fallback.enrich(anime);
+        if ("JIKAN".equalsIgnoreCase(anime.provider)) return jikan.enrich(anime);
+        try {
+            Anime result = getAnimeById(anime.id);
+            if (result != null) return result;
+        } catch (IOException failure) {
+            Anime result;
+            try { result = fallback.enrich(anime); }
+            catch (IOException secondary) { failure.addSuppressed(secondary); result = jikan.enrich(anime); }
+            offline = false;
+            return result;
+        }
+        Anime result;
+        try { result = fallback.enrich(anime); }
+        catch (IOException failure) { result = jikan.enrich(anime); }
+        offline = false;
+        return result;
     }
 
     public Anime getAnimeById(int id) throws IOException, InterruptedException {
         String gql = "query ($id: Int) { " +
                 "Media(id: $id, type: ANIME) { " +
-                animeFields() +
+                animeFields() + detailFields() +
                 "} }";
 
         var variables = mapper.createObjectNode().put("id", id);
@@ -67,26 +116,50 @@ public class AniListClient {
                 .set("variables", variables)
                 .toString();
 
-        HttpResponse<String> resp = sendWithRetry(payload);
-        if (resp.statusCode() != 200) {
-            throw new IOException("AniList HTTP " + resp.statusCode() + " - " + resp.body());
-        }
-
-        JsonNode root = mapper.readTree(resp.body());
-        throwIfGraphQLError(root);
+        JsonNode root = responseData(payload);
         JsonNode node = root.path("data").path("Media");
         if (node.isMissingNode() || node.isNull()) return null;
         return parseAnime(node);
     }
 
+    private String detailFields() {
+        return "description(asHtml: false) trailer { id site } siteUrl averageScore " +
+            "characters(page: 1, perPage: 25, sort: [ROLE, RELEVANCE, ID]) { " +
+            "pageInfo { hasNextPage } edges { role node { id name { full } image { medium } } " +
+            "voiceActors(language: JAPANESE, sort: RELEVANCE) { name { full } image { medium } } } } " +
+            "relations { edges { relationType(version: 2) node { id type title { romaji english native } " +
+            "coverImage { large } format episodes duration } } } ";
+    }
+
+    public Anime loadCastPage(int id, int page) throws IOException, InterruptedException {
+        String query = "query ($id: Int, $page: Int) { Media(id:$id, type:ANIME) { id " +
+            "characters(page:$page, perPage:25, sort:[ROLE, RELEVANCE, ID]) { pageInfo { hasNextPage } " +
+            "edges { role node { id name { full } image { medium } } " +
+            "voiceActors(language:JAPANESE, sort:RELEVANCE) { name { full } image { medium } } } } } }";
+        String payload = mapper.writeValueAsString(Map.of("query", query, "variables", Map.of("id", id, "page", page)));
+        JsonNode root = responseData(payload);
+        if (root.path("data").path("Media").isNull()) throw new IOException("Anime unavailable");
+        return parseAnime(root.path("data").path("Media"));
+    }
+
+    public Anime retryAlternativeCast(Anime anime) throws IOException, InterruptedException {
+        if (anime == null || anime.malId <= 0) throw new IOException("No cast provider ID");
+        Anime loaded = new Anime();
+        jikan.loadCast(anime.malId, loaded);
+        if (loaded.cast.isEmpty()) throw new IOException("No cast available");
+        return loaded;
+    }
+
     public List<Anime> browse(String mode, String filter, int page, int perPage) throws IOException, InterruptedException {
         String cacheKey = "browse:" + mode + ":" + filter + ":" + page + ":" + perPage;
-        if (cache.containsKey(cacheKey)) return new ArrayList<>(cache.get(cacheKey));
+        List<Anime> cached = cache.get(cacheKey);
+        if (cached != null) return new ArrayList<>(cached);
 
         String sort = "POPULARITY_DESC";
         if ("RECENT".equalsIgnoreCase(mode)) {
             sort = "START_DATE_DESC";
         }
+        if ("TRENDING".equalsIgnoreCase(mode)) sort = "TRENDING_DESC";
 
         boolean useTag = "TAG".equalsIgnoreCase(mode) && filter != null && !filter.isBlank();
         boolean useGenre = !useTag && filter != null && !filter.isBlank();
@@ -115,19 +188,46 @@ public class AniListClient {
                 .set("variables", variables)
                 .toString();
 
-        List<Anime> results = executePageQuery(payload);
-        if (results.isEmpty() && useTag && filter != null && !filter.isBlank()) {
-            // Alcuni tag di AniList sono più delicati dei generi: se il tag non rende risultati,
-            // faccio una ricerca testuale di fallback così la sezione non rimane vuota.
-            results = search(filter, perPage);
+        List<Anime> results;
+        try { results = executePageQuery(payload); }
+        catch (IOException failure) {
+            // Read the previous app's discover cache without changing it.
+            results = legacyBrowse(mode, filter, page, perPage);
+            boolean triedFallback = false;
+            if (results == null && "TRENDING".equalsIgnoreCase(mode)) {
+                triedFallback = true;
+                try { results = fallback.browse(mode, filter, page, perPage); }
+                catch (IOException secondary) { failure.addSuppressed(secondary); }
+                if (results == null || results.isEmpty()) results = legacyBrowse("POPULAR", null, page, perPage);
+            }
+            if (results == null) {
+                if (!triedFallback) try { results = fallback.browse(mode, filter, page, perPage); }
+                catch (IOException secondary) { failure.addSuppressed(secondary); }
+                if (results == null) results = jikan.browse(mode, filter, page, perPage);
+                offline = false;
+            }
         }
         cache.put(cacheKey, new ArrayList<>(results));
         return results;
     }
 
+    private List<Anime> legacyBrowse(String mode, String filter, int page, int perPage) {
+        try {
+            Path legacy = profile.resolve("discover_cache.json");
+            if (!Files.exists(legacy) || Files.size(legacy) > 16 * 1024 * 1024 || perPage > 30) return null;
+            JsonNode saved = mapper.readTree(legacy.toFile());
+            String key = mode + "|" + (filter == null ? "" : filter) + "|" + page + "|30";
+            JsonNode entries = saved.path(key);
+            if (!entries.isArray()) return null;
+            List<Anime> results = new ArrayList<>(Arrays.asList(mapper.treeToValue(entries, Anime[].class)));
+            if (perPage < results.size()) results = new ArrayList<>(results.subList(0, perPage));
+            return results;
+        } catch (IOException ignored) { return null; }
+    }
+
     private String animeFields() {
-        return "id " +
-                "isAdult " +
+        return "id idMal " +
+                "isAdult bannerImage " +
                 "title { romaji english native } " +
                 "coverImage { extraLarge large medium color } " +
                 "episodes duration genres format status seasonYear season " +
@@ -136,13 +236,7 @@ public class AniListClient {
     }
 
     private List<Anime> executePageQuery(String payload) throws IOException, InterruptedException {
-        HttpResponse<String> resp = sendWithRetry(payload);
-        if (resp.statusCode() != 200) {
-            throw new IOException("AniList HTTP " + resp.statusCode() + " - " + resp.body());
-        }
-
-        JsonNode root = mapper.readTree(resp.body());
-        throwIfGraphQLError(root);
+        JsonNode root = responseData(payload);
         JsonNode media = root.path("data").path("Page").path("media");
 
         List<Anime> out = new ArrayList<>();
@@ -153,6 +247,32 @@ public class AniListClient {
             }
         }
         return out;
+    }
+
+    /** Cached API responses survive restarts; only successful, valid responses are cached. */
+    private JsonNode responseData(String payload) throws IOException, InterruptedException {
+        Path saved;
+        try {
+            String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload.getBytes(StandardCharsets.UTF_8)));
+            saved = profile.resolve("api_cache").resolve(hash + ".json");
+        } catch (Exception e) { throw new IOException(e); }
+        try {
+            if (System.currentTimeMillis() < retryAfter) throw new IOException("AniList temporarily unavailable");
+            HttpResponse<String> response = sendWithRetry(payload);
+            if (response.statusCode() != 200) {
+                if (response.statusCode() == 403 || response.statusCode() == 429) retryAfter = System.currentTimeMillis() + 30_000;
+                throw new IOException("AniList HTTP " + response.statusCode() + " - " + response.body());
+            }
+            JsonNode root = mapper.readTree(response.body()); throwIfGraphQLError(root); offline = false;
+            try { AtomicFiles.write(saved, response.body().getBytes(StandardCharsets.UTF_8)); } catch (IOException ignored) { }
+            return root;
+        } catch (IOException failure) {
+            offline = true;
+            if (Files.exists(saved) && Files.size(saved) <= 8 * 1024 * 1024) {
+                JsonNode root = mapper.readTree(saved.toFile()); throwIfGraphQLError(root); return root;
+            }
+            throw failure;
+        }
     }
 
     private void throwIfGraphQLError(JsonNode root) throws IOException {
@@ -173,7 +293,7 @@ public class AniListClient {
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
                 HttpResponse<String> resp = client.send(createRequest(payload), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-                if (resp.statusCode() != 429 && resp.statusCode() < 500) return resp;
+                if (resp.statusCode() < 500) return resp;
                 if (attempt == 3) return resp;
             } catch (IOException e) {
                 lastIo = e;
@@ -190,11 +310,11 @@ public class AniListClient {
 
     private HttpRequest createRequest(String payload) {
         return HttpRequest.newBuilder()
-                .uri(URI.create(API))
+                .uri(endpoint)
                 .timeout(Duration.ofSeconds(18))
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("Accept", "application/json")
-                .header("User-Agent", "MyAnimeDesk/0.3.8")
+                .header("User-Agent", "MyAnimeDesk/0.4.0")
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
                 .build();
     }
@@ -202,8 +322,37 @@ public class AniListClient {
     private Anime parseAnime(JsonNode node) {
         Anime a = new Anime();
         a.id = node.path("id").asInt();
+        a.malId = node.path("idMal").asInt(0);
+        a.provider = "ANILIST";
         a.title = readTitle(node.path("title"));
         a.coverImage = readCover(node.path("coverImage"));
+        a.bannerImage = node.path("bannerImage").asText("");
+        a.description = node.path("description").asText("");
+        a.trailerId = node.path("trailer").path("id").asText("");
+        a.trailerSite = node.path("trailer").path("site").asText("");
+        a.siteUrl = node.path("siteUrl").asText("");
+        a.averageScore = node.path("averageScore").asInt(0);
+        a.detailsLoaded = node.has("description");
+        a.hasMoreCast = node.path("characters").path("pageInfo").path("hasNextPage").asBoolean(false);
+        for (JsonNode edge : node.path("characters").path("edges")) {
+            Anime.CastMember member = new Anime.CastMember();
+            member.id = edge.path("node").path("id").asInt();
+            member.name = edge.path("node").path("name").path("full").asText("");
+            member.image = edge.path("node").path("image").path("medium").asText("");
+            member.role = edge.path("role").asText("");
+            List<String> actors = new ArrayList<>();
+            for (JsonNode actor : edge.path("voiceActors")) actors.add(actor.path("name").path("full").asText(""));
+            member.voiceActor = String.join(", ", actors);
+            member.voiceImage = edge.path("voiceActors").path(0).path("image").path("medium").asText("");
+            a.cast.add(member);
+        }
+        for (JsonNode edge : node.path("relations").path("edges")) {
+            if (!"ANIME".equals(edge.path("node").path("type").asText())) continue;
+            Anime.Relation relation = new Anime.Relation();
+            relation.type = edge.path("relationType").asText("");
+            relation.anime = parseAnime(edge.path("node"));
+            a.relations.add(relation);
+        }
         a.episodes = node.path("episodes").isMissingNode() || node.path("episodes").isNull() ? 0 : node.path("episodes").asInt(0);
         a.duration = node.path("duration").isMissingNode() || node.path("duration").isNull() ? 0 : node.path("duration").asInt(0);
 
@@ -282,5 +431,12 @@ public class AniListClient {
             case "FALL" -> "Autunno";
             default -> "N/D";
         };
+    }
+
+    @Override public void close() {
+        cache.clear();
+        jikan.close();
+        fallback.close();
+        client.shutdownNow();
     }
 }
