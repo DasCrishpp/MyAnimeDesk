@@ -1,33 +1,127 @@
 package com.myanimedesk;
 
-import com.fasterxml.jackson.databind.*;
-import javafx.animation.*;
-import javafx.application.*;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.EnumMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Properties;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.function.Consumer;
+import java.util.function.Function;
+
+import static com.myanimedesk.Ui.button;
+import static com.myanimedesk.Ui.entrance;
+import static com.myanimedesk.Ui.image;
+import static com.myanimedesk.Ui.label;
+import static com.myanimedesk.Ui.panel;
+import static com.myanimedesk.Ui.row;
+import static com.myanimedesk.Ui.scroll;
+import static com.myanimedesk.Ui.spacer;
+
+import javafx.animation.Animation;
+import javafx.animation.FadeTransition;
+import javafx.animation.Interpolator;
+import javafx.animation.KeyFrame;
+import javafx.animation.KeyValue;
+import javafx.animation.PauseTransition;
+import javafx.animation.ParallelTransition;
+import javafx.animation.ScaleTransition;
+import javafx.animation.Timeline;
+import javafx.animation.TranslateTransition;
+import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.concurrent.Worker;
-import javafx.geometry.*;
-import javafx.scene.*;
-import javafx.scene.control.*;
-import javafx.scene.image.*;
-import javafx.scene.input.*;
-import javafx.scene.layout.*;
+import javafx.geometry.Bounds;
+import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
+import javafx.geometry.Point2D;
+import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
+import javafx.scene.AccessibleRole;
+import javafx.scene.Node;
+import javafx.scene.Parent;
+import javafx.scene.Scene;
+import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.ColorPicker;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.ContextMenu;
+import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.MenuItem;
+import javafx.scene.control.ProgressBar;
+import javafx.scene.control.ProgressIndicator;
+import javafx.scene.control.RadioMenuItem;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Separator;
+import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.control.Slider;
+import javafx.scene.control.Spinner;
+import javafx.scene.control.TextField;
+import javafx.scene.control.TextFormatter;
+import javafx.scene.control.TitledPane;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.control.ToggleGroup;
+import javafx.scene.control.Tooltip;
+import javafx.scene.effect.GaussianBlur;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
+import javafx.scene.input.ScrollEvent;
+import javafx.scene.layout.Background;
+import javafx.scene.layout.BackgroundFill;
+import javafx.scene.layout.BackgroundImage;
+import javafx.scene.layout.BackgroundPosition;
+import javafx.scene.layout.BackgroundRepeat;
+import javafx.scene.layout.BackgroundSize;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.ColumnConstraints;
+import javafx.scene.layout.CornerRadii;
+import javafx.scene.layout.FlowPane;
+import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
+import javafx.scene.layout.TilePane;
+import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.shape.Rectangle;
 import javafx.scene.web.WebView;
-import javafx.stage.*;
+import javafx.stage.FileChooser;
+import javafx.stage.Popup;
+import javafx.stage.Stage;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
-
-import java.io.*;
-import java.net.URI;
-import java.net.http.*;
-import java.nio.channels.*;
-import java.nio.file.*;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.function.*;
-
-import static com.myanimedesk.Ui.*;
 
 /** JavaFX presentation. Library rules and persistence live in AnimeListManager. */
 public class App extends Application {
@@ -55,6 +149,7 @@ public class App extends Application {
     private Route route = Route.HOME;
     private Timeline carousel;
     private PauseTransition searchDelay;
+    private Popup activeCardPopup;
     private int pageGeneration, searchGeneration;
     private final Deque<StackPane> modals = new ArrayDeque<>();
     private final Deque<Anime> detailHistory = new ArrayDeque<>();
@@ -66,9 +161,24 @@ public class App extends Application {
     private LibraryQuery.Order libraryOrder = LibraryQuery.Order.RECENT;
     private String libraryGenre, libraryFolder, librarySearch = "";
     private boolean advanced;
+    private boolean updateInProgress;
     private Runnable updateLibraryGrid;
 
     private enum Route { HOME, LIBRARY, RANKING, DISCOVER, SETTINGS }
+    private static final class RatioPane extends StackPane {
+        @Override public Orientation getContentBias() { return Orientation.HORIZONTAL; }
+        @Override protected double computeMinHeight(double width) { return ratioHeight(width); }
+        @Override protected double computePrefHeight(double width) { return ratioHeight(width); }
+        @Override protected double computeMaxHeight(double width) { return Double.MAX_VALUE; }
+        private double ratioHeight(double width) { return (width > 0 ? width : 960) * 9.0 / 16.0; }
+    }
+    private static final class BannerDeck extends StackPane {
+        @Override public Orientation getContentBias() { return Orientation.HORIZONTAL; }
+        @Override protected double computeMinHeight(double width) { return ratioHeight(width); }
+        @Override protected double computePrefHeight(double width) { return ratioHeight(width); }
+        @Override protected double computeMaxHeight(double width) { return ratioHeight(width); }
+        private double ratioHeight(double width) { return Math.min(width > 0 ? width : 1280, 1280) * 9.0 / 16.0; }
+    }
     public static void main(String[] args) { launch(args); }
     private boolean en() { return prefs.language().equals("en"); }
     private String t(String it, String en) { return en() ? en : it; }
@@ -108,6 +218,10 @@ public class App extends Application {
         covers = new CoverCache(profile.resolve("image_cache"));
         root = new StackPane(); root.getStyleClass().add("app-root");
         Scene scene = new Scene(root, 1280, 820);
+        scene.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> root.getStyleClass().remove("keyboard-navigation"));
+        scene.addEventFilter(KeyEvent.KEY_PRESSED, e -> {
+            if (e.getCode() == KeyCode.TAB && !root.getStyleClass().contains("keyboard-navigation")) root.getStyleClass().add("keyboard-navigation");
+        });
         scene.getStylesheets().add(Objects.requireNonNull(getClass().getResource("/com/myanimedesk/desk.css")).toExternalForm());
         scene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
             if (event.getCode() == KeyCode.ESCAPE && !modals.isEmpty()) { closeTopModal(); event.consume(); }
@@ -124,6 +238,8 @@ public class App extends Application {
         async(() -> { library.loadFromDefault(); return true; }, root, ignored -> {
             ready = true; navigate(Route.HOME);
             if (!prefs.onboarded()) onboarding(false);
+            if (!System.getProperty("jpackage.app-path", "").isBlank())
+                async(() -> AppUpdater.latest(VERSION), root, release -> { if (release != null) installUpdate(release); }, error -> {});
         }, failure -> {
             root.getChildren().setAll(panel(label(t("Il salvataggio ha bisogno di attenzione", "Your save needs attention"), "title"),
                 label(t("Non ho sovrascritto la tua lista. Controlla library.json nella cartella del profilo o ripristina una copia valida.",
@@ -147,6 +263,7 @@ public class App extends Application {
 
     private void navigate(Route next) {
         if (!ready) return;
+        hideCardPopup();
         closeAllModals();
         route = next; pageGeneration++; searchGeneration++;
         if (carousel != null) { carousel.stop(); carousel = null; }
@@ -173,9 +290,7 @@ public class App extends Application {
     }
     private HBox statusBar() {
         Label status = label(t("Pronto.", "Ready."), "muted");
-        HBox footer = row(button(t("Aggiorna GUI", "Refresh UI"), "refresh-button", () -> {
-            navigate(route);
-        }), status, spacer(), label("© 2026 MyAnimeDesk", "copyright"));
+        HBox footer = row(status, spacer(), label("© 2026 MyAnimeDesk", "copyright"));
         footer.getStyleClass().add("status-bar");
         return footer;
     }
@@ -389,19 +504,103 @@ public class App extends Application {
             e.consume();
         });
         heart.addEventHandler(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
-        card.setOnMouseClicked(e -> { if (e.getButton() == MouseButton.PRIMARY) showDetails(anime, false); });
+        card.setOnMouseClicked(e -> { if (e.getButton() == MouseButton.PRIMARY) { hideCardPopup(); showDetails(anime, false); } });
         card.setOnKeyPressed(e -> { if (e.getCode() == KeyCode.ENTER) { showDetails(anime, false); e.consume(); } });
         ContextMenu menu = new ContextMenu();
+        ToggleGroup statuses = new ToggleGroup();
         for (Anime.Status value : Anime.Status.values()) {
-            MenuItem item = new MenuItem(status(value)); item.setOnAction(e -> changeStatus(anime, value)); menu.getItems().add(item);
+            RadioMenuItem item = new RadioMenuItem(status(value));
+            item.getStyleClass().add("status-item-" + value.name().toLowerCase(Locale.ROOT));
+            item.setToggleGroup(statuses);
+            item.setOnAction(e -> changeStatus(anime, value)); menu.getItems().add(item);
         }
+        menu.setOnShowing(e -> {
+            Anime saved = library.findById(anime.id);
+            for (int i = 0; i < Anime.Status.values().length; i++)
+                ((RadioMenuItem) menu.getItems().get(i)).setSelected(saved != null && saved.status == Anime.Status.values()[i]);
+        });
+        menu.getItems().add(new SeparatorMenuItem());
         MenuItem folder = new MenuItem(t("Organizza in cartelle", "Organise in folders")); folder.setOnAction(e -> folderMembership(anime));
         menu.getItems().add(folder);
         card.setOnContextMenuRequested(e -> { menu.show(card, e.getScreenX(), e.getScreenY()); e.consume(); });
-        // No detached hover windows: wheel scrolling always closes the quick menu.
-        card.addEventFilter(ScrollEvent.SCROLL, e -> menu.hide());
-        card.sceneProperty().addListener((obs, old, scene) -> { if (scene == null) menu.hide(); });
+
+        Popup hoverMenu = new Popup(); hoverMenu.setAutoHide(false); hoverMenu.setHideOnEscape(true);
+        VBox hoverContent = new VBox(7); hoverContent.getStyleClass().add("card-hover-menu"); hoverContent.setPrefWidth(204);
+        Label hoverTitle = label(anime.title, "card-hover-title");
+        Label hoverMeta = label(meta(anime.format) + "  ·  " + (anime.episodes > 0 ? anime.episodes + " ep" : "—")
+            + "\n" + meta(anime.year) + (anime.genres == null || anime.genres.isEmpty() ? "" : "  ·  " + genre(anime.genres.get(0))), "tiny");
+        VBox statusButtons = new VBox(4, label(t("STATO DI VISIONE", "WATCH STATUS"), "eyebrow"));
+        for (Anime.Status value : Anime.Status.values()) {
+            Button quick = button(status(value), "quick-status", () -> {
+                hoverMenu.hide(); if (activeCardPopup == hoverMenu) activeCardPopup = null; changeStatus(anime, value);
+            });
+            quick.getStyleClass().add("quick-status-" + value.name().toLowerCase(Locale.ROOT));
+            quick.setMaxWidth(Double.MAX_VALUE); statusButtons.getChildren().add(quick);
+        }
+        hoverContent.getChildren().addAll(hoverTitle, hoverMeta, new Separator(), statusButtons);
+        hoverMenu.getContent().add(hoverContent);
+        PauseTransition showDelay = new PauseTransition(Duration.millis(180));
+        PauseTransition hideDelay = new PauseTransition(Duration.millis(130));
+        ParallelTransition[] hideMotion = new ParallelTransition[1];
+        Runnable hideAnimated = () -> {
+            if (!hoverMenu.isShowing()) return;
+            FadeTransition fade = new FadeTransition(Duration.millis(90), hoverContent); fade.setToValue(0);
+            ScaleTransition shrink = new ScaleTransition(Duration.millis(90), hoverContent); shrink.setToX(.97); shrink.setToY(.97);
+            hideMotion[0] = new ParallelTransition(fade, shrink);
+            hideMotion[0].setOnFinished(event -> {
+                hoverMenu.hide(); hoverContent.setOpacity(1); hoverContent.setScaleX(1); hoverContent.setScaleY(1);
+                if (activeCardPopup == hoverMenu) activeCardPopup = null;
+            });
+            hideMotion[0].playFromStart();
+        };
+        Runnable scheduleHide = () -> { hideDelay.stop(); hideDelay.setOnFinished(e -> {
+            if (!card.isHover() && !hoverContent.isHover()) hideAnimated.run();
+        }); hideDelay.playFromStart(); };
+        showDelay.setOnFinished(e -> {
+            if (!card.isHover() || card.getScene() == null) return;
+            hideCardPopup();
+            Point2D right = card.localToScreen(card.getWidth() + 12, 4), left = card.localToScreen(-216, 4);
+            if (right == null || left == null) return;
+            double x = right.getX(), edge = card.getScene().getWindow().getX() + card.getScene().getWindow().getWidth();
+            boolean opensLeft = x + 212 > edge; if (opensLeft) x = left.getX();
+            hoverContent.setOpacity(0); hoverContent.setScaleX(.96); hoverContent.setScaleY(.96);
+            hoverContent.setTranslateX(opensLeft ? 12 : -12);
+            hoverMenu.show(card, x, right.getY()); activeCardPopup = hoverMenu;
+            FadeTransition fade = new FadeTransition(Duration.millis(140), hoverContent); fade.setToValue(1);
+            ScaleTransition grow = new ScaleTransition(Duration.millis(140), hoverContent); grow.setToX(1); grow.setToY(1);
+            TranslateTransition slide = new TranslateTransition(Duration.millis(140), hoverContent); slide.setToX(0); slide.setInterpolator(Interpolator.EASE_OUT);
+            new ParallelTransition(fade, grow, slide).play();
+        });
+        card.setOnMouseEntered(e -> {
+            hideDelay.stop(); if (hideMotion[0] != null) hideMotion[0].stop();
+            hoverContent.setOpacity(1); hoverContent.setScaleX(1); hoverContent.setScaleY(1);
+            if (!hoverMenu.isShowing()) showDelay.playFromStart();
+            ScaleTransition grow = new ScaleTransition(Duration.millis(140), card); grow.setToX(1.018); grow.setToY(1.018); grow.play();
+        });
+        card.setOnMouseExited(e -> {
+            showDelay.stop(); scheduleHide.run();
+            ScaleTransition shrink = new ScaleTransition(Duration.millis(140), card); shrink.setToX(1); shrink.setToY(1); shrink.play();
+        });
+        hoverContent.setOnMouseEntered(e -> {
+            hideDelay.stop(); if (hideMotion[0] != null) hideMotion[0].stop();
+            hoverContent.setOpacity(1); hoverContent.setScaleX(1); hoverContent.setScaleY(1);
+        });
+        hoverContent.setOnMouseExited(e -> scheduleHide.run());
+        hoverContent.addEventFilter(ScrollEvent.SCROLL, e -> { hoverMenu.hide(); if (activeCardPopup == hoverMenu) activeCardPopup = null; e.consume(); });
+        card.addEventFilter(ScrollEvent.SCROLL, e -> { menu.hide(); hoverMenu.hide(); if (activeCardPopup == hoverMenu) activeCardPopup = null; });
+        card.sceneProperty().addListener((obs, old, scene) -> { if (scene == null) { menu.hide(); hoverMenu.hide(); if (activeCardPopup == hoverMenu) activeCardPopup = null; } });
         return card;
+    }
+    private void hideCardPopup() { if (activeCardPopup != null) { activeCardPopup.hide(); activeCardPopup = null; } }
+    private ListCell<Anime.Status> statusCell() {
+        return new ListCell<>() {
+            @Override protected void updateItem(Anime.Status value, boolean empty) {
+                super.updateItem(value, empty);
+                getStyleClass().removeIf(name -> name.startsWith("status-choice-"));
+                setText(empty || value == null ? null : status(value));
+                if (!empty && value != null) getStyleClass().add("status-choice-" + value.name().toLowerCase(Locale.ROOT));
+            }
+        };
     }
 
     private void refreshCards(Node node) {
@@ -493,7 +692,7 @@ public class App extends Application {
         if (currentDetail == null) currentDetail = detailCache.getOrDefault(anime.id, anime);
         int generation = ++detailGeneration;
         renderDetail(false);
-        if (!currentDetail.detailsLoaded) {
+        if (!detailCache.containsKey(anime.id)) {
             Label loading = label(t("Carico trama, cast e collegamenti…", "Loading synopsis, cast and related titles…"), "muted");
             detailBody.getChildren().add(0, loading);
             Anime requested = currentDetail;
@@ -548,35 +747,37 @@ public class App extends Application {
         favourite.setMaxWidth(Double.MAX_VALUE);
         left.getChildren().add(favourite);
         ComboBox<Anime.Status> state = combo(List.of(Anime.Status.values()), saved == null ? null : saved.status, this::status);
+        state.setCellFactory(list -> statusCell()); state.setButtonCell(statusCell());
+        state.getStyleClass().add("status-selector");
         state.setPromptText(t("+ Aggiungi alla lista", "+ Add to library")); state.setId("detail-status");
         state.setOnAction(e -> { if (state.getValue() != null) changeStatus(anime, state.getValue()); });
         left.getChildren().addAll(label(t("Stato nella tua lista", "Your library status"), "tiny"), state);
         if (saved != null) {
             Spinner<Integer> views = new Spinner<>(0, AnimeListManager.MAX_VIEWS, saved.viewCount());
             views.setEditable(false); views.setId("view-count"); views.setMaxWidth(Double.MAX_VALUE);
-            Button apply = button(t("Salva conteggio", "Save count"), "quiet", () -> {
-                int count = views.getValue();
+            Label hours = label(number(saved.watchedHours()) + t(" ore guardate", " hours watched"), "accent-text");
+            boolean[] restoringCount = { false };
+            java.util.function.Consumer<Integer> restoreCount = value -> Platform.runLater(() -> {
+                restoringCount[0] = true;
+                try { views.getValueFactory().setValue(value); } finally { restoringCount[0] = false; }
+            });
+            views.valueProperty().addListener((obs, oldCount, count) -> {
+                if (restoringCount[0]) return;
                 if (count == 0 && library.findById(anime.id).rated()) {
                     message(t("Questo anime ha un voto", "This anime has a rating"),
-                        t("Rimuovi prima il voto se vuoi azzerare tutte le visioni.", "Remove its rating before clearing all viewings.")); return;
+                        t("Rimuovi prima il voto se vuoi azzerare tutte le visioni.", "Remove its rating before clearing all viewings."));
+                    restoreCount.accept(oldCount); return;
                 }
                 boolean ask = saved.viewCount() == 0 && count > 0 && !saved.rated();
                 if (mutate(() -> library.setViewCount(anime.id, count))) {
-                    afterLibraryChange(); refreshDetail(); if (ask) ratingDialog(library.findById(anime.id), true);
+                    hours.setText(number(saved.watchedHours()) + t(" ore guardate", " hours watched"));
+                    afterLibraryChange(); if (ask) ratingDialog(library.findById(anime.id), true);
+                } else {
+                    restoreCount.accept(oldCount);
                 }
             });
-            Button rewatch = button("+1 " + t("visione completa", "completed viewing"), "primary", () -> {
-                Anime latest = library.findById(anime.id);
-                boolean ask = latest.viewCount() == 0 && !latest.rated();
-                if (mutate(() -> library.setViewCount(anime.id, latest.viewCount() + 1))) {
-                    afterLibraryChange(); refreshDetail(); if (ask) ratingDialog(library.findById(anime.id), true);
-                }
-            });
-            rewatch.setDisable(saved.viewCount() >= AnimeListManager.MAX_VIEWS);
-            rewatch.setMaxWidth(Double.MAX_VALUE);
             left.getChildren().addAll(new Separator(), label(t("Visioni complete", "Completed viewings"), "tiny"),
-                views, apply, rewatch,
-                label(number(saved.watchedHours()) + t(" ore guardate", " hours watched"), "accent-text"));
+                views, label(t("Salvataggio automatico", "Saved automatically"), "tiny"), hours);
             Button organise = button(t("▤ Organizza in cartelle", "▤ Organise in folders"), "quiet", () -> folderMembership(anime));
             organise.setMaxWidth(Double.MAX_VALUE);
             String folders = saved.folderIds.stream().map(library.folders()::get).filter(Objects::nonNull)
@@ -616,9 +817,18 @@ public class App extends Application {
         right.getChildren().add(external);
         right.getChildren().add(label(t("Trama", "Synopsis"), "section-title"));
         String synopsis = Texts.synopsis(anime.description);
-        right.getChildren().add(label(synopsis.isEmpty() ? t("Trama non disponibile.", "No synopsis available.") : synopsis, "synopsis"));
-        right.getChildren().add(label(t("Trama e nomi provengono da AniList, Kitsu o MyAnimeList. Il trailer viene riprodotto nell'app.",
-            "Synopsis and names come from AniList, Kitsu or MyAnimeList. The trailer plays inside the app."), "tiny"));
+        Label plot = label(synopsis.isEmpty() ? t("Trama non disponibile.", "No synopsis available.") : en() ? synopsis : "Traduco la trama…", "synopsis");
+        VBox plotBox = new VBox(8, plot); right.getChildren().add(plotBox);
+        if (!en() && !synopsis.isEmpty()) {
+            Runnable translate = () -> async(() -> SynopsisTranslator.italian(synopsis, profile), plot, plot::setText, failure -> {
+                plot.setText("Traduzione momentaneamente non disponibile.");
+                Button original = button("Mostra originale inglese", "quiet", () -> plot.setText(synopsis));
+                plotBox.getChildren().setAll(plot, original);
+            });
+            Platform.runLater(translate);
+        }
+        right.getChildren().add(label(t("Dati da AniList. Trama tradotta automaticamente in italiano.",
+            "Catalogue data provided by AniList."), "tiny"));
         if (saved != null && saved.viewCount() > 0) {
             right.getChildren().add(row(label(t("Il tuo voto", "Your rating"), "section-title"), spacer(),
                 button(saved.rated() ? t("Modifica voti", "Edit ratings") : t("Vota questo anime", "Rate this anime"), "primary", () -> ratingDialog(library.findById(anime.id), false))));
@@ -678,26 +888,31 @@ public class App extends Application {
     private void showTrailer(Anime anime) {
         String embed = trailerEmbedUrl(anime), browser = trailerUrl(anime);
         if (embed == null || browser == null) return;
+        TrailerPage trailerPage;
+        try { trailerPage = new TrailerPage(embed); }
+        catch (IOException error) { message(t("Trailer", "Trailer"), t("Impossibile avviare il player.", "Could not start the player.")); return; }
         WebView player = new WebView();
-        player.setContextMenuEnabled(false); player.setPrefSize(860, 484); player.setMinHeight(360);
+        player.setContextMenuEnabled(false); player.setPrefSize(1120, 630); player.setMinHeight(0);
         ProgressIndicator loading = new ProgressIndicator(); loading.setMaxSize(42, 42);
         Label error = label(t("Il player non è riuscito a caricare il trailer.", "The player could not load the trailer."), "muted");
         Button browserButton = button(t("Apri nel browser", "Open in browser"), "quiet", () -> openUrl(browser));
-        VBox failure = new VBox(14, error, browserButton); failure.setAlignment(Pos.CENTER);
+        VBox failure = new VBox(14, error); failure.setAlignment(Pos.CENTER);
         failure.setVisible(false); failure.setManaged(false);
-        StackPane frame = new StackPane(player, loading, failure); frame.getStyleClass().add("trailer-frame");
+        StackPane frame = new RatioPane(); frame.getChildren().addAll(player, loading, failure);
+        frame.setMaxWidth(Double.MAX_VALUE); frame.setPrefWidth(1120); frame.getStyleClass().add("trailer-frame");
+        Rectangle playerClip = new Rectangle(); playerClip.widthProperty().bind(frame.widthProperty()); playerClip.heightProperty().bind(frame.heightProperty());
+        playerClip.setArcWidth(24); playerClip.setArcHeight(24); frame.setClip(playerClip);
         VBox body = new VBox(14, frame, label(t("Se il servizio video impedisce la riproduzione incorporata, puoi aprirlo nel browser.",
-            "If the video service blocks embedded playback, you can open it in your browser."), "tiny"));
-        VBox.setVgrow(frame, Priority.ALWAYS);
-        StackPane dialog = modal(t("Trailer · ", "Trailer · ") + anime.title, body, 940, true);
+            "If the video service blocks embedded playback, you can open it in your browser."), "tiny"), browserButton);
+        StackPane dialog = modal(t("Trailer · ", "Trailer · ") + anime.title, body, 1280, true);
         player.getEngine().getLoadWorker().stateProperty().addListener((obs, old, state) -> {
             loading.setVisible(state == Worker.State.RUNNING || state == Worker.State.SCHEDULED);
             if (state == Worker.State.FAILED || state == Worker.State.CANCELLED) {
                 failure.setManaged(true); failure.setVisible(true);
             }
         });
-        dialog.sceneProperty().addListener((obs, old, scene) -> { if (scene == null) player.getEngine().load("about:blank"); });
-        player.getEngine().load(embed);
+        dialog.getProperties().put("dispose", (Runnable) () -> { player.getEngine().load("about:blank"); trailerPage.close(); });
+        player.getEngine().load(trailerPage.url());
     }
     private void renderCast(Anime anime, VBox box) {
         box.getChildren().clear();
@@ -750,22 +965,52 @@ public class App extends Application {
         return box;
     }
     private void ratingDialog(Anime anime, boolean optional) {
-        VBox body = new VBox(16, label(t("Da 0 a 10 per categoria. Puoi usare un solo 12 come voto speciale. L'overall è la media dei dieci voti.",
-            "Score each category from 0 to 10. You may use one special 12. Overall is the average of all ten scores."), "muted"));
-        VBox fields = new VBox(10); Map<RatingCategory, ComboBox<Integer>> controls = new EnumMap<>(RatingCategory.class);
+        Label overall = label("", "rating-overall-value");
+        VBox summary = new VBox(3, label("OVERALL", "eyebrow"), overall,
+            label(t("La media si aggiorna mentre scegli i voti", "The average updates while you score"), "tiny"));
+        summary.getStyleClass().add("rating-summary");
+        TilePane fields = new TilePane(14, 14); fields.setPrefColumns(2); fields.setPrefTileWidth(440);
+        Map<RatingCategory, Slider> controls = new EnumMap<>(RatingCategory.class);
+        Map<RatingCategory, Button> special = new EnumMap<>(RatingCategory.class);
+        Map<RatingCategory, Label> displayed = new EnumMap<>(RatingCategory.class);
+        Runnable[] update = new Runnable[1];
         for (RatingCategory category : RatingCategory.values()) {
-            List<Integer> scores = new ArrayList<>(); for (int n = 0; n <= 10; n++) scores.add(n); scores.add(12);
-            ComboBox<Integer> score = combo(scores, anime.ratings.get(category.name()), Object::toString);
-            score.setPromptText("—"); score.setPrefWidth(84); score.setMinWidth(84); score.setMaxWidth(84); score.setId("rating-" + category.name());
+            Integer savedScore = anime.ratings.get(category.name());
+            Slider score = new Slider(0, 10, savedScore == null ? 5 : Math.min(10, savedScore));
+            score.setBlockIncrement(1); score.setMajorTickUnit(1); score.setMinorTickCount(0); score.setSnapToTicks(true);
+            score.setShowTickMarks(true); score.setId("rating-" + category.name()); score.getStyleClass().add("rating-slider");
+            Label value = label(savedScore != null && savedScore == 12 ? "12" : Integer.toString((int)Math.round(score.getValue())), "rating-value");
             Label help = label("?", "help"); help.setTooltip(new Tooltip(en() ? category.helpEn : category.helpIt));
-            Label caption = label(en() ? category.en : category.it, "body");
-            fields.getChildren().add(row(caption, help, spacer(), score)); controls.put(category, score);
+            Button bonus = button(t("Voto speciale 12", "Special score 12"), "rating-special", () -> {});
+            bonus.setMaxWidth(Double.MAX_VALUE);
+            VBox card = new VBox(10, row(label(en() ? category.en : category.it, "rating-category"), help, spacer(), value), score, bonus);
+            card.getStyleClass().add("rating-card"); fields.getChildren().add(card);
+            controls.put(category, score); special.put(category, bonus); displayed.put(category, value);
+            if (savedScore != null && savedScore == 12) { bonus.getStyleClass().add("rating-special-selected"); score.setDisable(true); }
+            score.valueProperty().addListener((obs, old, selected) -> {
+                value.setText(Integer.toString((int)Math.round(selected.doubleValue()))); if (update[0] != null) update[0].run();
+            });
+            bonus.setOnAction(e -> {
+                boolean selecting = !bonus.getStyleClass().contains("rating-special-selected");
+                special.forEach((otherCategory, other) -> {
+                    other.getStyleClass().remove("rating-special-selected"); controls.get(otherCategory).setDisable(false);
+                    displayed.get(otherCategory).setText(Integer.toString((int)Math.round(controls.get(otherCategory).getValue())));
+                });
+                if (selecting) { bonus.getStyleClass().add("rating-special-selected"); score.setDisable(true); value.setText("12"); }
+                else value.setText(Integer.toString((int)Math.round(score.getValue())));
+                update[0].run();
+            });
         }
-        Label overall = label("", "accent-text"); Label validation = label("", "error");
-        body.getChildren().addAll(scroll(fields), overall, validation);
-        StackPane dialog = modal(t("Il tuo voto · ", "Your rating · ") + anime.title, body, 660, true);
+        Label validation = label("", "error");
+        ScrollPane scoreScroll = scroll(fields); scoreScroll.setPrefViewportHeight(620);
+        VBox body = new VBox(16, summary,
+            label(t("Sposta i cursori da 0 a 10. Un solo criterio può ricevere il voto speciale 12.",
+                "Move the sliders from 0 to 10. Only one category can receive the special score of 12."), "muted"),
+            scoreScroll, validation);
+        StackPane dialog = modal(t("La tua valutazione · ", "Your rating · ") + anime.title, body, 1120, true);
         Button save = button(t("Salva in classifica", "Save to ranking"), "primary", () -> {
-            Map<String,Integer> scores = new LinkedHashMap<>(); controls.forEach((key, box) -> scores.put(key.name(), box.getValue()));
+            Map<String,Integer> scores = new LinkedHashMap<>(); controls.forEach((key, slider) -> scores.put(key.name(),
+                special.get(key).getStyleClass().contains("rating-special-selected") ? 12 : (int)Math.round(slider.getValue())));
             try { RatingCategory.validate(scores); }
             catch (IllegalArgumentException e) { validation.setText(t("Completa tutti i voti: 0–10 e al massimo un 12.", "Complete all scores: 0–10 and at most one 12.")); return; }
             if (mutate(() -> library.setRating(anime.id, scores))) { closeModal(dialog); afterLibraryChange(); refreshDetail(); }
@@ -779,25 +1024,13 @@ public class App extends Application {
                 })));
         actions.getChildren().addAll(spacer(), button(optional ? t("Non ora", "Not now") : t("Annulla", "Cancel"), "quiet", () -> closeModal(dialog)), save);
         body.getChildren().add(actions);
-        boolean[] updating = {false};
-        Runnable update = () -> {
-            if (updating[0]) return; updating[0] = true;
-            boolean bonusUsed = controls.values().stream().anyMatch(box -> Integer.valueOf(12).equals(box.getValue()));
-            int completed = 0, sum = 0;
-            for (ComboBox<Integer> box : controls.values()) {
-                Integer selected = box.getValue();
-                if (selected != null) { completed++; sum += selected; }
-                boolean allow = !bonusUsed || Integer.valueOf(12).equals(selected);
-                if (allow && !box.getItems().contains(12)) box.getItems().add(12);
-                if (!allow) box.getItems().remove(Integer.valueOf(12));
-            }
-            save.setDisable(completed != RatingCategory.values().length);
-            overall.setText(completed == 10 ? "OVERALL  " + number(sum / 10.0)
-                : completed + "/10 " + t("categorie compilate", "categories completed"));
-            updating[0] = false;
+        update[0] = () -> {
+            int sum = 0;
+            for (RatingCategory category : RatingCategory.values()) sum += special.get(category).getStyleClass().contains("rating-special-selected")
+                ? 12 : (int)Math.round(controls.get(category).getValue());
+            overall.setText(number(sum / 10.0)); validation.setText("");
         };
-        controls.values().forEach(box -> box.valueProperty().addListener((obs, old, value) -> update.run()));
-        update.run();
+        update[0].run();
     }
 
     private void rankingPage() {
@@ -840,35 +1073,58 @@ public class App extends Application {
         search.setPromptText(t("Cerca un anime, una storia, un mondo…", "Search for an anime, a story, a world…"));
         HBox.setHgrow(search, Priority.ALWAYS);
         VBox suggestions = new VBox(3); suggestions.setVisible(false); suggestions.setManaged(false); suggestions.getStyleClass().add("suggestions");
+        Popup suggestionPopup = new Popup(); suggestionPopup.setAutoHide(true); suggestionPopup.setHideOnEscape(true);
+        suggestionPopup.getContent().add(suggestions); suggestions.getProperties().put("popup", suggestionPopup);
         VBox content = new VBox(26);
-        page.getChildren().addAll(row(search, button(t("Cerca", "Search"), "primary", () -> onlineSearch(search.getText(), content, suggestions))), suggestions, content);
+        page.getChildren().addAll(row(search, button(t("Cerca", "Search"), "primary", () -> onlineSearch(search.getText(), content, suggestions))), content);
         ScrollPane scrolling = scroll(page); shell.setCenter(scrolling);
         searchDelay = new PauseTransition(Duration.millis(320));
         search.textProperty().addListener((obs, old, query) -> {
             int generation = ++searchGeneration; searchDelay.stop();
-            suggestions.getChildren().clear(); suggestions.setVisible(false); suggestions.setManaged(false);
+            suggestions.getChildren().clear(); hideSuggestions(suggestions);
             if (query.strip().length() < 2) return;
-            searchDelay.setOnFinished(e -> async(() -> api.search(query.strip(), 5), suggestions, results -> {
+            searchDelay.setOnFinished(e -> async(() -> api.search(query.strip(), 5), search, results -> {
                 if (generation != searchGeneration || !search.isFocused()) return;
                 suggestions.getChildren().clear();
                 for (Anime anime : results) {
-                    Button choice = button(anime.title, "suggestion", () -> {
-                        suggestions.setVisible(false); suggestions.setManaged(false); showDetails(anime, false);
-                    });
+                    HBox choice = row(image(covers, anime.coverImage, 36, 50, 7),
+                        new VBox(3, label(anime.title, "body"),
+                            label(meta(anime.format) + "  ·  " + (anime.year == null ? "—" : meta(anime.year)), "tiny")), spacer());
+                    choice.getStyleClass().add("suggestion");
+                    choice.setAccessibleText(anime.title);
+                    choice.setAccessibleRole(AccessibleRole.BUTTON); choice.setFocusTraversable(true);
+                    choice.setOnMouseClicked(click -> { hideSuggestions(suggestions); showDetails(anime, false); });
+                    choice.setOnKeyPressed(key -> { if (key.getCode() == KeyCode.ENTER) { hideSuggestions(suggestions); showDetails(anime, false); } });
                     choice.setMaxWidth(Double.MAX_VALUE); suggestions.getChildren().add(choice);
                 }
-                suggestions.setVisible(!results.isEmpty()); suggestions.setManaged(!results.isEmpty());
+                if (!results.isEmpty()) {
+                    Button all = button(t("Vedi tutti i risultati", "See all results"), "suggestion-all",
+                        () -> onlineSearch(query.strip(), content, suggestions));
+                    all.setMaxWidth(Double.MAX_VALUE); suggestions.getChildren().add(all);
+                }
+                if (!results.isEmpty() && search.getScene() != null) {
+                    double popupWidth = Math.min(620, Math.max(460, search.getWidth() * .48));
+                    suggestions.setMinWidth(popupWidth); suggestions.setPrefWidth(popupWidth); suggestions.setMaxWidth(popupWidth);
+                    suggestions.setVisible(true); suggestions.setManaged(true);
+                    Point2D anchor = search.localToScreen(0, search.getHeight() + 6);
+                    if (anchor != null) suggestionPopup.show(search, anchor.getX(), anchor.getY());
+                }
             }, error -> {}));
             searchDelay.playFromStart();
         });
         search.setOnAction(e -> onlineSearch(search.getText(), content, suggestions));
-        scrolling.addEventFilter(ScrollEvent.SCROLL, e -> { suggestions.setVisible(false); suggestions.setManaged(false); });
+        scrolling.addEventFilter(ScrollEvent.SCROLL, e -> hideSuggestions(suggestions));
         discoverHome(content, scrolling);
+    }
+    private void hideSuggestions(VBox suggestions) {
+        suggestions.setVisible(false); suggestions.setManaged(false);
+        Object popup = suggestions.getProperties().get("popup");
+        if (popup instanceof Popup overlay) overlay.hide();
     }
     private void onlineSearch(String text, VBox content, VBox suggestions) {
         String query = text.strip(); if (query.isEmpty()) return;
         searchGeneration++; searchDelay.stop();
-        suggestions.setVisible(false); suggestions.setManaged(false);
+        hideSuggestions(suggestions);
         if (carousel != null) { carousel.stop(); carousel = null; }
         content.getChildren().setAll(row(label(t("Risultati per ", "Results for ") + "“" + query + "”", "section-title"), spacer(),
             button(t("Torna a Esplora", "Back to Explore"), "quiet", () -> navigate(Route.DISCOVER))));
@@ -885,10 +1141,19 @@ public class App extends Application {
     }
     private void discoverHome(VBox content, ScrollPane scrolling) {
         content.getChildren().clear();
-        StackPane banner = new StackPane(label(t("Cerco le storie del momento…", "Finding today's trending stories…"), "subtitle"));
-        banner.setPrefHeight(310); banner.setMinHeight(310); banner.getStyleClass().add("banner");
-        content.getChildren().add(banner);
-        async(() -> api.browse("TRENDING", null, 1, 8), banner, anime -> buildBanner(banner, anime),
+        BannerDeck deck = new BannerDeck(); deck.getStyleClass().add("banner-deck");
+        deck.setMaxWidth(Double.MAX_VALUE); deck.setMinWidth(0);
+        StackPane banner = new RatioPane();
+        banner.getChildren().add(label(t("Cerco le storie del momento…", "Finding today's trending stories…"), "subtitle"));
+        banner.setMaxWidth(1280); banner.setMinWidth(0); banner.setPrefWidth(1280);
+        Rectangle bannerClip = new Rectangle();
+        bannerClip.widthProperty().bind(banner.widthProperty()); bannerClip.heightProperty().bind(banner.heightProperty());
+        bannerClip.setArcWidth(40); bannerClip.setArcHeight(40); banner.setClip(bannerClip);
+        banner.getStyleClass().add("banner");
+        deck.getChildren().add(banner);
+        HBox bannerArea = new HBox(deck); bannerArea.setAlignment(Pos.TOP_CENTER);
+        HBox.setHgrow(deck, Priority.ALWAYS); content.getChildren().add(bannerArea);
+        async(() -> api.browse("TRENDING", null, 1, 8), deck, anime -> buildBanner(deck, banner, anime),
             error -> {
                 VBox fallback = new VBox(12, label(t("Una nuova storia ti aspetta", "A new story awaits"), "hero-title"),
                     label(t("Banner momentaneamente non disponibile. Puoi continuare a esplorare.", "The banner is temporarily unavailable. You can still explore."), "muted"),
@@ -905,8 +1170,6 @@ public class App extends Application {
         sections.add(new DiscoverSection(t("Nuove uscite", "New releases"), "RECENT", null, content, scrolling));
         for (String other : Preferences.GENRES)
             if (!prefs.genres().contains(other)) sections.add(new DiscoverSection(genre(other), "GENRE", other, content, scrolling));
-        sections.add(new DiscoverSection("Isekai", "TAG", "Isekai", content, scrolling));
-        sections.add(new DiscoverSection("Shōnen", "TAG", "Shounen", content, scrolling));
         for (DiscoverSection section : sections) content.getChildren().add(section.box);
         Runnable visibility = () -> sections.forEach(DiscoverSection::checkVisibility);
         ChangeListener<Number> scrollListener = (obs, old, value) -> visibility.run();
@@ -951,19 +1214,21 @@ public class App extends Application {
         void load() {
             loading = true;
             items.getChildren().setAll(label(t("Caricamento…", "Loading…"), "muted"));
-            async(() -> api.browse(mode, filter, 1, 8), box, found -> {
+            async(() -> api.browse(mode, filter, 1, 30), box, found -> {
                 loading = false; data = found; if (visible) show();
             }, error -> { loading = false; if (visible) networkRetry(items, this::load); });
         }
         void show() {
             if (data.isEmpty()) { items.getChildren().setAll(label(t("Nessun titolo disponibile.", "No titles available."), "muted")); return; }
-            HBox cards = new HBox(18); for (Anime anime : data) cards.getChildren().add(animeCard(anime));
+            HBox cards = new HBox(18); cards.setPadding(new Insets(7, 10, 20, 10));
+            for (Anime anime : data) cards.getChildren().add(animeCard(anime));
             ScrollPane strip = new ScrollPane(cards);
+            strip.setPrefViewportHeight(382);
             strip.setFitToHeight(true); strip.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER); strip.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
             HBox controls = row(spacer(), button("←", "quiet", () -> horizontal(strip, -0.6)), button("→", "quiet", () -> horizontal(strip, 0.6)));
             strip.addEventFilter(ScrollEvent.SCROLL, e -> {
                 if (e.isShiftDown() || Math.abs(e.getDeltaX()) > Math.abs(e.getDeltaY())) {
-                    horizontal(strip, (e.getDeltaX() != 0 ? -e.getDeltaX() : -e.getDeltaY()) / 600); e.consume();
+                    horizontal(strip, (e.getDeltaX() != 0 ? -e.getDeltaX() : -e.getDeltaY()) / 360); e.consume();
                 }
             });
             items.getChildren().setAll(strip, controls);
@@ -974,40 +1239,77 @@ public class App extends Application {
             new KeyValue(pane.hvalueProperty(), Math.max(0, Math.min(1, pane.getHvalue() + increment)), Interpolator.EASE_BOTH)));
         move.play();
     }
-    private void buildBanner(StackPane banner, List<Anime> anime) { buildBanner(banner, anime, 0); }
-    private void buildBanner(StackPane banner, List<Anime> anime, int initial) {
+    private void buildBanner(StackPane deck, StackPane banner, List<Anime> anime) { buildBanner(deck, banner, anime, 0); }
+    private void buildBanner(StackPane deck, StackPane banner, List<Anime> anime, int initial) {
         if (anime.isEmpty()) { banner.getChildren().setAll(label(t("Nessuna tendenza disponibile", "No trending titles available"), "subtitle")); return; }
         List<Anime> picks = anime.stream().filter(a -> a.bannerImage != null && !a.bannerImage.isBlank()).limit(6).toList();
         if (picks.isEmpty()) picks = anime.stream().limit(6).toList();
         final List<Anime> slides = picks; int[] position = {Math.floorMod(initial, picks.size())};
+        int[] direction = {1};
         Runnable[] display = new Runnable[1];
         display[0] = () -> {
             Anime item = slides.get(position[0]);
             ImageView background = new ImageView(); background.setPreserveRatio(false);
             background.fitWidthProperty().bind(banner.widthProperty()); background.fitHeightProperty().bind(banner.heightProperty());
-            String url = item.bannerImage == null || item.bannerImage.isBlank() ? item.coverImage : item.bannerImage;
-            covers.load(url, 1400, 550, background::setImage);
+            loadBannerImage(background, item);
             Region shade = new Region(); shade.getStyleClass().add("banner-gradient");
             VBox caption = new VBox(10, label(t("ORA DI TENDENZA", "TRENDING NOW"), "eyebrow"), label(item.title, "hero-title"),
                 label(meta(item.format) + "  ·  " + meta(item.year), "subtitle"),
                 button(t("Scopri l'anime", "Explore this anime") + " →", "primary", () -> showDetails(item, false)));
             caption.setAlignment(Pos.CENTER_LEFT); caption.setMaxWidth(690); caption.setPadding(new Insets(32));
             StackPane.setAlignment(caption, Pos.CENTER_LEFT);
-            HBox controls = row(button("←", "banner-button", () -> { position[0] = Math.floorMod(position[0] - 1, slides.size()); display[0].run(); restartCarousel(); }),
+            HBox controls = row(button("←", "banner-button", () -> { direction[0] = -1; position[0] = Math.floorMod(position[0] - 1, slides.size()); display[0].run(); restartCarousel(); }),
                 label((position[0] + 1) + " / " + slides.size(), "tiny"),
-                button("→", "banner-button", () -> { position[0] = (position[0] + 1) % slides.size(); display[0].run(); restartCarousel(); }));
+                button("→", "banner-button", () -> { direction[0] = 1; position[0] = (position[0] + 1) % slides.size(); display[0].run(); restartCarousel(); }));
             controls.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
             StackPane.setAlignment(controls, Pos.BOTTOM_RIGHT); StackPane.setMargin(controls, new Insets(24));
-            banner.getChildren().setAll(background, shade, caption, controls);
-            banner.setOnMouseClicked(e -> { if (e.getTarget() == banner || e.getTarget() == background || e.getTarget() == shade) showDetails(item, false); });
-            entrance(caption, 0);
+            StackPane slide = new StackPane(background, shade, caption, controls);
+            slide.setOnMouseClicked(e -> { if (e.getTarget() == slide || e.getTarget() == background || e.getTarget() == shade) showDetails(item, false); });
+
+            List<Node> previous = List.copyOf(banner.getChildren());
+            slide.setOpacity(0); slide.setTranslateX(direction[0] * 34);
+            banner.getChildren().add(slide);
+            FadeTransition fade = new FadeTransition(Duration.millis(310), slide); fade.setToValue(1);
+            TranslateTransition move = new TranslateTransition(Duration.millis(360), slide); move.setToX(0); move.setInterpolator(Interpolator.EASE_OUT);
+            ParallelTransition reveal = new ParallelTransition(fade, move);
+            reveal.setOnFinished(event -> banner.getChildren().setAll(slide)); reveal.play();
+            for (Node old : previous) {
+                FadeTransition away = new FadeTransition(Duration.millis(220), old); away.setToValue(0); away.play();
+            }
+
+            StackPane left = bannerPreview(deck, slides.get(Math.floorMod(position[0] - 1, slides.size())), Pos.CENTER_LEFT);
+            StackPane right = bannerPreview(deck, slides.get((position[0] + 1) % slides.size()), Pos.CENTER_RIGHT);
+            deck.getChildren().setAll(left, right, banner);
+            FadeTransition sides = new FadeTransition(Duration.millis(360), left); sides.setFromValue(0); sides.setToValue(.46); sides.play();
+            FadeTransition sidesRight = new FadeTransition(Duration.millis(360), right); sidesRight.setFromValue(0); sidesRight.setToValue(.46); sidesRight.play();
         };
         display[0].run();
         if (carousel != null) carousel.stop();
-        carousel = new Timeline(new KeyFrame(Duration.seconds(7), e -> { position[0] = (position[0] + 1) % slides.size(); display[0].run(); }));
+        carousel = new Timeline(new KeyFrame(Duration.seconds(7), e -> { direction[0] = 1; position[0] = (position[0] + 1) % slides.size(); display[0].run(); }));
         carousel.setCycleCount(Animation.INDEFINITE);
-        banner.setOnMouseEntered(e -> carousel.pause()); banner.setOnMouseExited(e -> syncCarousel());
+        deck.setOnMouseEntered(e -> carousel.pause()); deck.setOnMouseExited(e -> syncCarousel());
         syncCarousel();
+    }
+    private StackPane bannerPreview(StackPane deck, Anime item, Pos alignment) {
+        StackPane preview = new StackPane(); preview.getStyleClass().add("banner-side");
+        preview.setMouseTransparent(true); preview.setMaxWidth(760); preview.setPrefWidth(760);
+        preview.prefHeightProperty().bind(deck.heightProperty().multiply(.88));
+        StackPane.setAlignment(preview, alignment);
+        ImageView image = new ImageView(); image.setPreserveRatio(false);
+        image.fitWidthProperty().bind(preview.widthProperty()); image.fitHeightProperty().bind(preview.heightProperty());
+        image.setEffect(new GaussianBlur(14)); loadBannerImage(image, item); preview.getChildren().add(image);
+        Rectangle clip = new Rectangle(); clip.widthProperty().bind(preview.widthProperty()); clip.heightProperty().bind(preview.heightProperty());
+        clip.setArcWidth(34); clip.setArcHeight(34); preview.setClip(clip);
+        return preview;
+    }
+    private void loadBannerImage(ImageView view, Anime item) {
+        String url = item.bannerImage == null || item.bannerImage.isBlank() ? item.coverImage : item.bannerImage;
+        covers.load(url, 1600, 900, img -> {
+            view.setImage(img);
+            double w = img.getWidth(), h = img.getHeight();
+            if (w / h > 16.0 / 9) w = h * 16.0 / 9; else h = w * 9.0 / 16;
+            view.setViewport(new Rectangle2D((img.getWidth() - w) / 2, (img.getHeight() - h) / 2, w, h));
+        });
     }
     private void restartCarousel() {
         if (carousel != null) { carousel.playFromStart(); syncCarousel(); }
@@ -1016,6 +1318,7 @@ public class App extends Application {
         if (carousel != null) { carousel.stop(); carousel = null; }
         VBox results = new VBox(20); TilePane grid = new TilePane(20, 24);
         Button more = button(t("Carica altri", "Load more"), "quiet", () -> {});
+        more.setMaxWidth(Double.MAX_VALUE); more.setMinHeight(58); more.getStyleClass().add("load-more");
         int[] page = {1}; Set<Integer> shown = new HashSet<>();
         Runnable load = () -> {
             more.setDisable(true); more.setText(t("Caricamento…", "Loading…"));
@@ -1241,23 +1544,24 @@ public class App extends Application {
     }
     private void checkUpdates(Label output, Button check) {
         check.setDisable(true); output.setText(t("Controllo in corso…", "Checking…"));
-        async(() -> {
-            try (HttpClient http = HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(8)).build()) {
-                HttpRequest request = HttpRequest.newBuilder(URI.create("https://api.github.com/repos/DasCrishpp/MyAnimeDesk/releases"))
-                    .header("Accept", "application/vnd.github+json").header("User-Agent", "MyAnimeDesk/" + VERSION)
-                    .timeout(java.time.Duration.ofSeconds(15)).build();
-                HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
-                if (response.statusCode() != 200) throw new IOException("GitHub unavailable");
-                JsonNode releases = new ObjectMapper().readTree(response.body());
-                for (JsonNode release : releases) if (!release.path("draft").asBoolean() && !release.path("tag_name").asText().isBlank())
-                    return release.path("tag_name").asText();
-                return VERSION;
-            }
-        }, output, remote -> {
+        async(() -> AppUpdater.latest(VERSION), output, release -> {
             check.setDisable(false);
-            output.setText(isNewerVersion(remote, VERSION) ? t("È disponibile la versione ", "Version available: ") + remote
-                : t("Stai usando la versione più recente.", "You're using the latest version."));
-        }, error -> { check.setDisable(false); output.setText(t("Controllo non disponibile. Puoi aprire le release nel browser.", "Could not check. You can open releases in your browser.")); });
+            output.setText(release != null ? t("Aggiornamento disponibile: ", "Update available: ") + release.version()
+                : t("Nessun nuovo aggiornamento installabile.", "No new installable update."));
+            if (release != null) installUpdate(release);
+        }, error -> { check.setDisable(false); output.setText(t("Controllo non disponibile. Riprova più tardi.", "Check unavailable. Try again later.")); });
+    }
+    private void installUpdate(AppUpdater.Release release) {
+        if (updateInProgress) return;
+        try { AppUpdater.installation(); }
+        catch (IOException error) { message(t("Aggiornamento", "Update"), t("L'aggiornamento automatico funziona dalla versione .exe. Questa è una sessione di sviluppo.", "Automatic updates work in the packaged .exe. This is a development session.")); return; }
+        updateInProgress = true;
+        VBox body = new VBox(18, new ProgressIndicator(), label(t("Scarico e verifico la versione ", "Downloading and verifying version ") + release.version(), "body"),
+            label(t("L'app si riavvierà automaticamente. Lista e impostazioni saranno conservate.", "The app will restart automatically. Your library and settings will be kept."), "muted"));
+        StackPane dialog = modal(t("Aggiornamento in corso", "Updating"), body, 600, false);
+        async(() -> { AppUpdater.stageAndLaunch(release, profile); return true; }, root,
+            done -> { shutdown(); window.close(); Platform.exit(); },
+            error -> { updateInProgress = false; closeModal(dialog); message(t("Aggiornamento non completato", "Update not completed"), error.getMessage()); });
     }
     static boolean isNewerVersion(String remote, String local) {
         try {
@@ -1289,6 +1593,8 @@ public class App extends Application {
         entrance(surface, 0); Platform.runLater(surface::requestFocus); return overlay;
     }
     private void closeModal(StackPane overlay) {
+        Object dispose = overlay.getProperties().remove("dispose");
+        if (dispose instanceof Runnable action) action.run();
         root.getChildren().remove(overlay); modals.remove(overlay);
         if (!modals.isEmpty()) modals.peek().setDisable(false);
         if (shell != null) shell.setDisable(!modals.isEmpty());
@@ -1340,6 +1646,7 @@ public class App extends Application {
     }
     private void shutdown() {
         if (closed) return; closed = true;
+        if (root != null) closeAllModals();
         if (carousel != null) carousel.stop();
         if (searchDelay != null) searchDelay.stop();
         for (Future<?> job : pending) job.cancel(true); pending.clear();

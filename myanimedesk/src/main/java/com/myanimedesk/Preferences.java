@@ -5,7 +5,8 @@ import java.nio.file.*;
 import java.util.*;
 
 final class Preferences {
-    static final List<String> GENRES = List.of("Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror", "Mahou Shoujo", "Mecha", "Music", "Mystery", "Psychological", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Thriller", "Ecchi", "Hentai");
+    static final List<String> TAGS = List.of("Isekai", "Shounen", "Seinen", "Shoujo", "Josei", "Romantic Comedy", "School", "Super Power", "Martial Arts", "Historical", "Military", "Detective", "Vampire", "Survival", "Time Manipulation", "Space", "Idol");
+    static final List<String> GENRES = java.util.stream.Stream.concat(java.util.stream.Stream.of("Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror", "Mahou Shoujo", "Mecha", "Music", "Mystery", "Psychological", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Thriller", "Ecchi", "Hentai"), TAGS.stream()).toList();
     final Properties values = new Properties();
     private final Path path;
     Preferences(Path path) { this.path = path; }

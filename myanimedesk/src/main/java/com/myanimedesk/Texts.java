@@ -10,7 +10,13 @@ final class Texts {
             case "Music" -> "Musicale"; case "Mystery" -> "Mistero";
             case "Psychological" -> "Psicologico"; case "Romance" -> "Romantico";
             case "Sci-Fi" -> "Fantascienza"; case "Sports" -> "Sport";
-            case "Supernatural" -> "Soprannaturale"; default -> raw;
+            case "Supernatural" -> "Soprannaturale";
+            case "Romantic Comedy" -> "Commedia romantica"; case "School" -> "Scolastico";
+            case "Super Power" -> "Superpoteri"; case "Martial Arts" -> "Arti marziali";
+            case "Historical" -> "Storico"; case "Military" -> "Militare";
+            case "Detective" -> "Investigativo"; case "Vampire" -> "Vampiri";
+            case "Survival" -> "Sopravvivenza"; case "Time Manipulation" -> "Viaggi nel tempo";
+            case "Space" -> "Spazio"; default -> raw;
         };
     }
     static String metadata(String raw, boolean english) {

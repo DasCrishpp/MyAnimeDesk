@@ -19,6 +19,8 @@ import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Arrays;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 public class AniListClient implements AutoCloseable {
     private static final String API = "https://graphql.anilist.co";
@@ -73,11 +75,7 @@ public class AniListClient implements AutoCloseable {
 
         List<Anime> results;
         try { results = executePageQuery(payload); }
-        catch (IOException failure) {
-            try { results = fallback.search(query, perPage); }
-            catch (IOException secondary) { failure.addSuppressed(secondary); results = jikan.search(query, perPage); }
-            offline = false;
-        }
+        catch (IOException failure) { throw failure; }
         cache.put(cacheKey, new ArrayList<>(results));
         return results;
     }
@@ -85,22 +83,14 @@ public class AniListClient implements AutoCloseable {
     /** Loads details from AniList, then transparently uses Jikan/MyAnimeList if needed. */
     public Anime getAnimeDetails(Anime anime) throws IOException, InterruptedException {
         if (anime == null) return null;
-        if ("KITSU".equalsIgnoreCase(anime.provider)) return fallback.enrich(anime);
-        if ("JIKAN".equalsIgnoreCase(anime.provider)) return jikan.enrich(anime);
-        try {
-            Anime result = getAnimeById(anime.id);
-            if (result != null) return result;
-        } catch (IOException failure) {
-            Anime result;
-            try { result = fallback.enrich(anime); }
-            catch (IOException secondary) { failure.addSuppressed(secondary); result = jikan.enrich(anime); }
-            offline = false;
-            return result;
-        }
-        Anime result;
-        try { result = fallback.enrich(anime); }
-        catch (IOException failure) { result = jikan.enrich(anime); }
-        offline = false;
+        if (anime.id < 1_000_000_000) return getAnimeById(anime.id);
+        // Old fallback entries keep their library ID; resolve by MAL ID, never by fuzzy title.
+        if (anime.malId <= 0) throw new IOException("Missing AniList mapping");
+        String query = "query($id:Int){ Media(idMal:$id,type:ANIME){" + animeFields() + detailFields() + "}}";
+        JsonNode node = responseData(mapper.writeValueAsString(Map.of("query", query, "variables", Map.of("id", anime.malId))))
+            .path("data").path("Media");
+        if (node.isNull() || node.isMissingNode()) throw new IOException("Anime unavailable");
+        Anime result = parseAnime(node); result.id = anime.id;
         return result;
     }
 
@@ -161,7 +151,7 @@ public class AniListClient implements AutoCloseable {
         }
         if ("TRENDING".equalsIgnoreCase(mode)) sort = "TRENDING_DESC";
 
-        boolean useTag = "TAG".equalsIgnoreCase(mode) && filter != null && !filter.isBlank();
+        boolean useTag = filter != null && !filter.isBlank() && ("TAG".equalsIgnoreCase(mode) || Preferences.TAGS.contains(filter));
         boolean useGenre = !useTag && filter != null && !filter.isBlank();
 
         StringBuilder mediaArgs = new StringBuilder("type: ANIME, sort: ").append(sort);
@@ -193,20 +183,9 @@ public class AniListClient implements AutoCloseable {
         catch (IOException failure) {
             // Read the previous app's discover cache without changing it.
             results = legacyBrowse(mode, filter, page, perPage);
-            boolean triedFallback = false;
-            if (results == null && "TRENDING".equalsIgnoreCase(mode)) {
-                triedFallback = true;
-                try { results = fallback.browse(mode, filter, page, perPage); }
-                catch (IOException secondary) { failure.addSuppressed(secondary); }
-                if (results == null || results.isEmpty()) results = legacyBrowse("POPULAR", null, page, perPage);
-            }
-            if (results == null) {
-                if (!triedFallback) try { results = fallback.browse(mode, filter, page, perPage); }
-                catch (IOException secondary) { failure.addSuppressed(secondary); }
-                if (results == null) results = jikan.browse(mode, filter, page, perPage);
-                offline = false;
-            }
+            if (results == null || useTag) throw failure;
         }
+        if (useGenre) results.removeIf(a -> a.genres == null || !a.genres.contains(filter));
         cache.put(cacheKey, new ArrayList<>(results));
         return results;
     }
@@ -256,6 +235,16 @@ public class AniListClient implements AutoCloseable {
             String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload.getBytes(StandardCharsets.UTF_8)));
             saved = profile.resolve("api_cache").resolve(hash + ".json");
         } catch (Exception e) { throw new IOException(e); }
+        // A fresh successful response is served immediately, including after restarting the app.
+        // This avoids waiting for the network every time a Discover row or an anime sheet is reopened.
+        boolean cataloguePage = payload.contains("Page(");
+        if (cataloguePage && Files.exists(saved) && Files.size(saved) <= 8 * 1024 * 1024) {
+            try {
+                if (Files.getLastModifiedTime(saved).toInstant().isAfter(Instant.now().minus(6, ChronoUnit.HOURS))) {
+                    JsonNode root = mapper.readTree(saved.toFile()); throwIfGraphQLError(root); offline = false; return root;
+                }
+            } catch (IOException ignored) { /* A broken cache is bypassed and replaced by the next valid response. */ }
+        }
         try {
             if (System.currentTimeMillis() < retryAfter) throw new IOException("AniList temporarily unavailable");
             HttpResponse<String> response = sendWithRetry(payload);

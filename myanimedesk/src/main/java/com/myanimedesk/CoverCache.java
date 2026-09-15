@@ -15,7 +15,7 @@ import java.util.function.Consumer;
 /** Bounded decoded thumbnail cache. Full-size originals are kept on disk only. */
 final class CoverCache implements AutoCloseable {
     private final Path directory;
-    private final ExecutorService workers = Executors.newFixedThreadPool(2, r -> {
+    private final ExecutorService workers = Executors.newFixedThreadPool(5, r -> {
         Thread thread = new Thread(r, "myanimedesk-covers"); thread.setDaemon(true); return thread;
     });
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).build();
