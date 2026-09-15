@@ -40,7 +40,7 @@ jobs:
           }
 
           $appSource = Get-Content "myanimedesk/src/main/java/com/myanimedesk/App.java" -Raw
-          $versionMatch = [regex]::Match($appSource, 'APP_VERSION\s*=\s*"([^"]+)"')
+          $versionMatch = [regex]::Match($appSource, '(?:APP_VERSION|VERSION)\s*=\s*"([^"]+)"')
           if (-not $versionMatch.Success -or $versionMatch.Groups[1].Value -ne $version) {
             throw "APP_VERSION in App.java non corrisponde al tag $version."
           }
@@ -76,7 +76,7 @@ jobs:
             --main-class com.myanimedesk.Launcher `
             --icon myanimedesk/icon/MyAnimeDesk.ico `
             --dest release-output `
-            --add-modules java.net.http,jdk.unsupported `
+            --add-modules java.net.http,jdk.unsupported,jdk.httpserver,java.desktop,java.xml,java.logging,java.management,java.naming,java.scripting,jdk.jsobject,jdk.crypto.ec `
             --java-options "--enable-native-access=ALL-UNNAMED" `
             --java-options "--add-opens=jdk.unsupported/sun.misc=ALL-UNNAMED"
 

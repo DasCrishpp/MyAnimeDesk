@@ -29,11 +29,13 @@ final class Ui {
         scroll.addEventFilter(ScrollEvent.SCROLL, e -> {
             if (e.isDirect() || e.isInertia() || e.isControlDown() || e.getDeltaY() == 0) return;
             // The nearest scrolling control owns the wheel; don't steal it from nested menus.
-            for (Node node = e.getTarget() instanceof Node n ? n : null; node != null && node != scroll; node = node.getParent())
-                if (node instanceof ScrollPane || node instanceof ComboBoxBase<?> || node instanceof Spinner<?> || node instanceof ListView<?>) return;
+            for (Node node = e.getTarget() instanceof Node n ? n : null; node != null && node != scroll; node = node.getParent()) {
+                if (node instanceof ScrollPane nested && nested.getVbarPolicy() != ScrollPane.ScrollBarPolicy.NEVER) return;
+                if (node instanceof ComboBoxBase<?> || node instanceof Spinner<?> || node instanceof ListView<?>) return;
+            }
             double excess = content.getLayoutBounds().getHeight() - scroll.getViewportBounds().getHeight();
             if (excess > 0) {
-                scroll.setVvalue(Math.max(0, Math.min(1, scroll.getVvalue() - e.getDeltaY() * 1.35 / excess)));
+                scroll.setVvalue(Math.max(0, Math.min(1, scroll.getVvalue() - e.getDeltaY() * 2.35 / excess)));
                 e.consume();
             }
         });
