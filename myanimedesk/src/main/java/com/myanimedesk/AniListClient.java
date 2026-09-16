@@ -303,7 +303,7 @@ public class AniListClient implements AutoCloseable {
                 .timeout(Duration.ofSeconds(18))
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("Accept", "application/json")
-                .header("User-Agent", "MyAnimeDesk/0.4.0")
+                .header("User-Agent", "MyAnimeDesk/0.4.1")
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
                 .build();
     }

@@ -187,7 +187,7 @@ final class KitsuClient implements AutoCloseable {
             HttpURLConnection connection = (HttpURLConnection) endpoint.resolve(path).toURL().openConnection();
             connection.setConnectTimeout(12_000); connection.setReadTimeout(20_000);
             connection.setRequestProperty("Accept", "application/vnd.api+json");
-            connection.setRequestProperty("User-Agent", "MyAnimeDesk/0.4.0");
+            connection.setRequestProperty("User-Agent", "MyAnimeDesk/0.4.1");
             connection.setRequestProperty("Connection", "close");
             int status; String body;
             try {

@@ -125,7 +125,7 @@ import javafx.util.StringConverter;
 
 /** JavaFX presentation. Library rules and persistence live in AnimeListManager. */
 public class App extends Application {
-    private static final String VERSION = "0.4.0";
+    private static final String VERSION = "0.4.1";
     private static final String RELEASES = "https://github.com/DasCrishpp/MyAnimeDesk/releases";
     private final Path profile = Path.of(System.getProperty("user.home"), ".myanimedesk");
     private final Preferences prefs = new Preferences(profile.resolve("app.properties"));
