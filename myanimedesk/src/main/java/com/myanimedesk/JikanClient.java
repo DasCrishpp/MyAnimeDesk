@@ -257,7 +257,7 @@ final class JikanClient implements AutoCloseable {
             HttpURLConnection connection = (HttpURLConnection) endpoint.resolve(path).toURL().openConnection();
             connection.setConnectTimeout(12_000); connection.setReadTimeout(20_000);
             connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty("User-Agent", "MyAnimeDesk/0.4.0");
+            connection.setRequestProperty("User-Agent", "MyAnimeDesk/0.4.1");
             connection.setRequestProperty("Connection", "close");
             connection.setRequestMethod("GET");
             int status;
