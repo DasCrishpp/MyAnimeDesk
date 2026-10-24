@@ -1,6 +1,15 @@
 package com.myanimedesk;
 
 import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.animation.PauseTransition;
+import javafx.scene.SnapshotParameters;
+import javafx.scene.control.Button;
+import javafx.scene.image.WritableImage;
+import javafx.stage.Stage;
+import javafx.util.Duration;
+import java.awt.image.BufferedImage;
+import javax.imageio.ImageIO;
 import java.nio.file.*;
 import java.util.*;
 
@@ -44,11 +53,42 @@ public class UiPreview {
         Application.launch(PreviewApp.class,args);
     }
     public static class PreviewApp extends App {
+        @Override public void start(Stage stage) {
+            super.start(stage);
+            String capture = System.getProperty("myanimedesk.preview.capture", "");
+            if (capture.isBlank()) return;
+            PauseTransition ready = new PauseTransition(Duration.seconds(2));
+            ready.setOnFinished(e -> {
+                String label = switch (capture) { case "settings" -> "Impostazioni"; case "ranking" -> "Classifica"; default -> "Scopri / Cerca"; };
+                stage.getScene().getRoot().lookupAll(".button").stream()
+                    .filter(node -> node instanceof Button button && button.getText().equals(label))
+                    .findFirst().ifPresent(node -> ((Button) node).fire());
+                PauseTransition settle = new PauseTransition(Duration.seconds(1));
+                settle.setOnFinished(event -> {
+                    try {
+                        WritableImage shot = stage.getScene().getRoot().snapshot(new SnapshotParameters(), null);
+                        BufferedImage output = new BufferedImage((int) shot.getWidth(), (int) shot.getHeight(), BufferedImage.TYPE_INT_ARGB);
+                        for (int y = 0; y < output.getHeight(); y++) for (int x = 0; x < output.getWidth(); x++)
+                            output.setRGB(x, y, shot.getPixelReader().getArgb(x, y));
+                        ImageIO.write(output, "png", Path.of("target", "preview-" + capture + ".png").toFile());
+                    } catch (Exception error) { error.printStackTrace(); }
+                    stage.close(); Platform.exit();
+                });
+                settle.play();
+            });
+            ready.play();
+        }
         @Override AniListClient createApi(Path directory) {
             return new AniListClient(directory) {
                 @Override public List<Anime> search(String query,int amount) {return FIXTURES.stream().filter(a->a.title.toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))).toList();}
+                @Override public List<Anime> search(DiscoverQuery query,int page,int amount) {
+                    if(page>1)return List.of();
+                    return FIXTURES.stream().filter(a->query.text().isBlank()||a.title.toLowerCase(Locale.ROOT).contains(query.text().toLowerCase(Locale.ROOT)))
+                        .filter(a->query.genre().isBlank()||a.genres.contains(query.genre())).toList();
+                }
                 @Override public List<Anime> browse(String mode,String filter,int page,int amount){return page==1?FIXTURES:List.of();}
                 @Override public Anime getAnimeById(int id){return FIXTURES.stream().filter(a->a.id==id).findFirst().orElse(null);}
+                @Override public List<Anime> seasons(Anime anime) {return FIXTURES;}
             };
         }
     }

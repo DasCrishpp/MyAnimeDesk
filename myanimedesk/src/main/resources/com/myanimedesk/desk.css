@@ -156,3 +156,20 @@
 .settings-card { -fx-padding: 20; -fx-min-height: 175; -fx-background-color: rgba(7,12,28,0.74); -fx-background-radius: 24; -fx-border-radius: 24; -fx-border-color: rgba(139,92,246,0.35); -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.28), 22, 0.18, 0, 8); }
 .settings-card .section-title { -fx-text-fill: white; }
 .settings-card .danger { -fx-background-color: linear-gradient(to right, #dc2626, #ef4444); -fx-text-fill: white; -fx-border-color: rgba(254,202,202,0.78); }
+.settings-file-group { -fx-padding: 18; -fx-background-color: rgba(24,35,62,0.64); -fx-background-radius: 16; -fx-border-color: rgba(148,163,184,0.15); -fx-border-radius: 16; }
+.settings-subtitle { -fx-font-size: 15; -fx-font-weight: bold; -fx-text-fill: #ded6f5; }
+.settings-data-path { -fx-font-size: 12; -fx-text-fill: #94a3b8; }
+.ranking-feature { -fx-padding: 24; -fx-background-color: linear-gradient(to bottom right, #30214c, #141c39); -fx-background-radius: 22; -fx-border-color: rgba(201,169,255,0.48); -fx-border-radius: 22; -fx-cursor: hand; }
+.ranking-feature:hover { -fx-background-color: linear-gradient(to bottom right, #413061, #1c2948); }
+.ranking-position { -fx-text-fill: #f0d9a2; -fx-font-size: 16; -fx-font-weight: bold; }
+.ranking-feature-score { -fx-text-fill: #fff4d9; -fx-font-size: 42; -fx-font-weight: bold; }
+.ranking-runner { -fx-padding: 15; -fx-background-color: #15213a; -fx-background-radius: 16; -fx-border-color: rgba(152,166,194,0.27); -fx-border-radius: 16; -fx-cursor: hand; }
+.ranking-runner:hover { -fx-background-color: #20304e; }
+.ranking-entry { -fx-border-color: rgba(148,163,184,0.13); -fx-border-radius: 12; }
+.discover-filters { -fx-padding: 17 18; -fx-background-color: rgba(9,17,35,0.88); -fx-background-radius: 17; -fx-border-color: rgba(148,163,184,0.14); -fx-border-radius: 17; }
+.discover-filter-field { -fx-min-width: 142; }
+.ranking-side-score { -fx-text-fill: #e8d8ff; -fx-font-size: 23; -fx-font-weight: bold; }
+.season-entry { -fx-cursor: hand; -fx-border-color: rgba(139,92,246,0.18); -fx-border-radius: 12; }
+.discover-filter-label { -fx-text-fill: #e8e7f7; -fx-font-size: 12; -fx-font-weight: bold; }
+.discover-filter-box { -fx-background-color: #18243a; -fx-border-color: transparent; -fx-border-radius: 9; -fx-background-radius: 9; -fx-min-height: 40; -fx-cursor: hand; }
+.discover-filter-box:hover, .discover-filter-box:focused { -fx-border-color: rgba(170,138,255,0.64); }

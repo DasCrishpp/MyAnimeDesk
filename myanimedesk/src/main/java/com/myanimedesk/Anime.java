@@ -51,6 +51,7 @@ public class Anime {
     public String year;          // es. 2026
     public String season;        // es. Primavera, Estate
     public String studio;        // es. BUG FILMS
+    public int startDate;        // YYYYMMDD, for sorting seasons chronologically
 
     public enum Status { TO_WATCH, WATCHING, WATCHED, DROPPED }
 

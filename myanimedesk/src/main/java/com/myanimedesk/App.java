@@ -29,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.time.Year;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -151,6 +152,7 @@ public class App extends Application {
     private PauseTransition searchDelay;
     private Popup activeCardPopup;
     private int pageGeneration, searchGeneration;
+    private DiscoverQuery discoverFilters = DiscoverQuery.empty();
     private final Deque<StackPane> modals = new ArrayDeque<>();
     private final Deque<Anime> detailHistory = new ArrayDeque<>();
     private StackPane detailModal;
@@ -717,6 +719,7 @@ public class App extends Application {
         to.malId = from.malId; to.kitsuId = from.kitsuId; to.provider = from.provider;
         to.title = from.title; to.coverImage = from.coverImage; to.episodes = from.episodes; to.duration = from.duration;
         to.genres = from.genres; to.format = from.format; to.year = from.year; to.season = from.season;
+        to.startDate = from.startDate;
         to.studio = from.studio; to.airingStatus = from.airingStatus; to.bannerImage = from.bannerImage;
         to.description = from.description; to.trailerId = from.trailerId; to.trailerSite = from.trailerSite;
         to.siteUrl = from.siteUrl; to.averageScore = from.averageScore; to.cast = from.cast; to.castPartial = from.castPartial;
@@ -843,23 +846,28 @@ public class App extends Application {
             if (expanded && !castBuilt[0]) { castBuilt[0] = true; renderCast(anime, cast); }
         });
         right.getChildren().add(castSection);
-        VBox related = new VBox(14);
-        TitledPane relatedSection = new TitledPane(t("Sequel, prequel e anime collegati", "Sequels, prequels & related anime"), related);
+        VBox related = new VBox(10);
+        TitledPane relatedSection = new TitledPane(t("Stagioni", "Seasons"), related);
         relatedSection.setExpanded(false);
         boolean[] relatedBuilt = {false};
         relatedSection.expandedProperty().addListener((obs, old, expanded) -> {
             if (expanded && !relatedBuilt[0]) {
                 relatedBuilt[0] = true;
-                if (anime.relations.isEmpty()) related.getChildren().add(label(t("Nessun anime collegato disponibile.", "No related anime available."), "muted"));
-                for (Anime.Relation relation : anime.relations) {
-                    if (relation.anime == null || relation.anime.id <= 0) continue;
-                    HBox entry = row(image(covers, relation.anime.coverImage, 60, 84, 10),
-                        new VBox(5, label(Texts.relation(relation.type, en()) + " · " + meta(relation.anime.format), "accent-text"),
-                            label(relation.anime.title, "body")), spacer(),
-                        button("→", "quiet", () -> showDetails(relation.anime, true)));
-                    entry.getStyleClass().add("list-row"); entry.setOnMouseClicked(e -> showDetails(relation.anime, true));
-                    related.getChildren().add(entry);
-                }
+                related.getChildren().setAll(label(t("Caricamento stagioni…", "Loading seasons…"), "muted"));
+                async(() -> api.seasons(anime), related, seasons -> {
+                    related.getChildren().clear();
+                    if (seasons.size() <= 1) { related.getChildren().add(label(t("Nessun'altra stagione disponibile.", "No other seasons available."), "muted")); return; }
+                    for (int index = 0; index < seasons.size(); index++) {
+                        Anime season = seasons.get(index);
+                        HBox entry = row(label(String.format("%02d", index + 1), "ranking-position"),
+                            image(covers, season.coverImage, 52, 72, 8),
+                            new VBox(5, label(season.title, "body"), label(meta(season.year) + "  ·  " + meta(season.season), "tiny")),
+                            spacer(), label(season.id == anime.id ? t("Attuale", "Current") : "→", "accent-text"));
+                        entry.getStyleClass().addAll("list-row", "season-entry");
+                        if (season.id != anime.id) entry.setOnMouseClicked(e -> showDetails(season, true));
+                        related.getChildren().add(entry);
+                    }
+                }, error -> related.getChildren().setAll(label(t("Stagioni non disponibili.", "Seasons unavailable."), "muted")));
             }
         });
         right.getChildren().add(relatedSection);
@@ -1035,34 +1043,39 @@ public class App extends Application {
 
     private void rankingPage() {
         List<Anime> ranking = library.ranking();
-        VBox page = page(routeName(Route.RANKING), t("Non il voto di tutti. Il tuo.", "Not everyone's score. Yours."));
-        page.getChildren().add(label(t("Solo gli anime con una visione completa e tutti i dieci voti entrano in classifica. A parità di media, ordine alfabetico.",
-            "Only anime with a completed viewing and all ten scores are ranked. Ties are sorted alphabetically."), "muted"));
-        if (ranking.isEmpty()) page.getChildren().add(empty(t("Il podio aspetta le tue storie", "Your podium is waiting"),
+        VBox page = page(routeName(Route.RANKING), null);
+        if (ranking.isEmpty()) page.getChildren().add(empty(t("Nessun voto", "No ratings yet"),
             t("Segna un anime come visto e scegli se votarlo. Puoi farlo anche dalla sua scheda.", "Mark an anime completed and choose whether to rate it. You can also rate it from its details."),
             t("Apri la mia lista", "Open my library"), () -> navigate(Route.LIBRARY)));
         else {
-            HBox podium = new HBox(18); podium.setAlignment(Pos.BOTTOM_CENTER);
-            for (int position : new int[]{2, 1, 3}) {
-                if (position > ranking.size()) continue;
+            Anime winner = ranking.get(0);
+            VBox winnerInfo = new VBox(10, label("01", "ranking-position"), label(winner.title, "detail-title"),
+                label(meta(winner.format) + "  ·  " + meta(winner.year), "muted"), spacer(),
+                label(number(winner.overall()), "ranking-feature-score"), label(t("VOTO FINALE", "OVERALL"), "eyebrow"));
+            HBox first = new HBox(22, image(covers, winner.coverImage, 174, 244, 15), winnerInfo);
+            first.getStyleClass().add("ranking-feature"); first.setAlignment(Pos.CENTER_LEFT);
+            first.setMinWidth(0); first.setMaxWidth(Double.MAX_VALUE); HBox.setHgrow(first, Priority.ALWAYS);
+            first.setOnMouseClicked(e -> showDetails(winner, false));
+            VBox others = new VBox(14); others.setMinWidth(0); others.setMaxWidth(Double.MAX_VALUE);
+            HBox.setHgrow(others, Priority.ALWAYS);
+            for (int position = 2; position <= Math.min(3, ranking.size()); position++) {
                 Anime anime = ranking.get(position - 1);
-                VBox place = new VBox(12, label(position == 1 ? "★  1" : Integer.toString(position), "podium-position"),
-                    image(covers, anime.coverImage, position == 1 ? 156 : 132, position == 1 ? 218 : 184, 16),
-                    label(anime.title, "card-title"), label(number(anime.overall()), "stat-value"), label("OVERALL", "tiny"));
-                place.getStyleClass().addAll("podium", "podium-" + position);
-                place.setAlignment(Pos.CENTER); place.setPrefWidth(230); place.setMaxWidth(260);
-                place.setOnMouseClicked(e -> showDetails(anime, false)); HBox.setHgrow(place, Priority.ALWAYS);
-                podium.getChildren().add(place); entrance(place, position - 1);
+                HBox entry = row(label(String.format("%02d", position), "ranking-position"),
+                    image(covers, anime.coverImage, 78, 109, 10),
+                    new VBox(7, label(anime.title, "card-title"), label(meta(anime.format) + "  ·  " + meta(anime.year), "tiny")),
+                    spacer(), label(number(anime.overall()), "ranking-side-score"));
+                entry.getStyleClass().add("ranking-runner"); entry.setOnMouseClicked(e -> showDetails(anime, false));
+                others.getChildren().add(entry);
             }
-            page.getChildren().add(podium);
+            HBox top = new HBox(18, first, others); top.setAlignment(Pos.TOP_LEFT);
+            page.getChildren().add(top);
             for (int index = 3; index < ranking.size(); index++) {
                 Anime anime = ranking.get(index);
                 HBox entry = row(label(String.format("%02d", index + 1), "rank-number"), image(covers, anime.coverImage, 48, 67, 8),
                     new VBox(4, label(anime.title, "body"), label(meta(anime.format) + "  ·  " + anime.viewCount() + t(" visioni", " viewings"), "tiny")),
                     spacer(), label(number(anime.overall()), "rank-number"), button(t("Dettagli", "Details") + " →", "quiet", () -> showDetails(anime, false)));
-                entry.getStyleClass().add("list-row"); page.getChildren().add(entry);
+                entry.getStyleClass().addAll("list-row", "ranking-entry"); page.getChildren().add(entry);
             }
-            page.getChildren().add(label(t("Apri un anime per vedere o modificare il voto di ogni categoria.", "Open an anime to view or edit each category score."), "muted"));
         }
         shell.setCenter(scroll(page));
     }
@@ -1076,39 +1089,52 @@ public class App extends Application {
         Popup suggestionPopup = new Popup(); suggestionPopup.setAutoHide(true); suggestionPopup.setHideOnEscape(true);
         suggestionPopup.getContent().add(suggestions); suggestions.getProperties().put("popup", suggestionPopup);
         VBox content = new VBox(26);
-        page.getChildren().addAll(row(search, button(t("Cerca", "Search"), "primary", () -> onlineSearch(search.getText(), content, suggestions))), content);
+        FlowPane filters = new FlowPane(10, 12); filters.getStyleClass().add("discover-filters");
+        List<String> genreOptions = new ArrayList<>(); genreOptions.add(""); genreOptions.addAll(Preferences.GENRES);
+        ComboBox<String> genreBox = combo(genreOptions, discoverFilters.genre(), value -> value.isBlank() ? t("Tutti", "Any") : genre(value));
+        List<Integer> years = new ArrayList<>(); years.add(0);
+        for (int year = Year.now().getValue() + 1; year >= 1960; year--) years.add(year);
+        ComboBox<Integer> yearBox = combo(years, discoverFilters.year(), value -> value == 0 ? t("Tutti", "Any") : Integer.toString(value));
+        ComboBox<DiscoverQuery.Sort> sortBox = combo(List.of(DiscoverQuery.Sort.values()), discoverFilters.sort(), value -> switch (value) {
+            case POPULARITY -> t("Popolarità", "Popularity"); case TITLE_ASC -> "A–Z";
+            case TITLE_DESC -> "Z–A"; case RATING -> t("Valutazione", "Rating");
+        });
+        ComboBox<DiscoverQuery.Status> statusBox = combo(List.of(DiscoverQuery.Status.values()), discoverFilters.status(), value -> switch (value) {
+            case ANY -> t("Tutti", "Any"); case RELEASING -> t("In corso", "Releasing");
+            case FINISHED -> t("Concluso", "Finished"); case NOT_YET_RELEASED -> t("In arrivo", "Upcoming");
+            case CANCELLED -> t("Cancellato", "Cancelled"); case HIATUS -> "Hiatus";
+        });
+        ComboBox<DiscoverQuery.Format> formatBox = combo(List.of(DiscoverQuery.Format.values()), discoverFilters.format(), value -> value == DiscoverQuery.Format.ANY ? t("Tutti", "Any") : value == DiscoverQuery.Format.TV_SHORT ? "TV Short" : value.toString());
+        ComboBox<DiscoverQuery.Season> seasonBox = combo(List.of(DiscoverQuery.Season.values()), discoverFilters.season(), value -> switch (value) {
+            case ANY -> t("Tutte", "Any"); case WINTER -> t("Inverno", "Winter");
+            case SPRING -> t("Primavera", "Spring"); case SUMMER -> t("Estate", "Summer");
+            case FALL -> t("Autunno", "Fall");
+        });
+        filters.getChildren().addAll(discoverFilter(t("Genere", "Genre"), genreBox), discoverFilter(t("Anno", "Year"), yearBox),
+            discoverFilter(t("Ordina", "Sort"), sortBox), discoverFilter(t("Stato", "Status"), statusBox),
+            discoverFilter(t("Tipo", "Format"), formatBox), discoverFilter(t("Stagione", "Season"), seasonBox));
+        List<Anime> previous = new ArrayList<>();
+        Runnable applyFilters = () -> {
+            discoverFilters = new DiscoverQuery("", genreBox.getValue(), yearBox.getValue(), sortBox.getValue(),
+                statusBox.getValue(), formatBox.getValue(), seasonBox.getValue());
+            previous.clear(); hideSuggestions(suggestions);
+            if (!search.getText().isBlank() || discoverFilters.hasFilters()) onlineSearch(search.getText(), content, suggestions);
+            else discoverHome(content, (ScrollPane) shell.getCenter());
+        };
+        for (ComboBox<?> box : List.of(genreBox, yearBox, sortBox, statusBox, formatBox, seasonBox)) box.setOnAction(e -> applyFilters.run());
+        page.getChildren().addAll(row(search, button(t("Cerca", "Search"), "primary", () -> onlineSearch(search.getText(), content, suggestions))), filters, content);
         ScrollPane scrolling = scroll(page); shell.setCenter(scrolling);
-        searchDelay = new PauseTransition(Duration.millis(320));
+        searchDelay = new PauseTransition(Duration.millis(65));
         search.textProperty().addListener((obs, old, query) -> {
             int generation = ++searchGeneration; searchDelay.stop();
             suggestions.getChildren().clear(); hideSuggestions(suggestions);
-            if (query.strip().length() < 2) return;
-            searchDelay.setOnFinished(e -> async(() -> api.search(query.strip(), 5), search, results -> {
+            if (query.isBlank()) return;
+            List<Anime> instant = previous.stream().filter(a -> a.title != null && a.title.toLowerCase(Locale.ROOT).contains(query.strip().toLowerCase(Locale.ROOT))).limit(5).toList();
+            if (!instant.isEmpty()) showSuggestions(instant, query.strip(), search, suggestions, content);
+            searchDelay.setOnFinished(e -> async(() -> api.search(discoverFilters.withText(query), 1, 5), search, results -> {
                 if (generation != searchGeneration || !search.isFocused()) return;
-                suggestions.getChildren().clear();
-                for (Anime anime : results) {
-                    HBox choice = row(image(covers, anime.coverImage, 36, 50, 7),
-                        new VBox(3, label(anime.title, "body"),
-                            label(meta(anime.format) + "  ·  " + (anime.year == null ? "—" : meta(anime.year)), "tiny")), spacer());
-                    choice.getStyleClass().add("suggestion");
-                    choice.setAccessibleText(anime.title);
-                    choice.setAccessibleRole(AccessibleRole.BUTTON); choice.setFocusTraversable(true);
-                    choice.setOnMouseClicked(click -> { hideSuggestions(suggestions); showDetails(anime, false); });
-                    choice.setOnKeyPressed(key -> { if (key.getCode() == KeyCode.ENTER) { hideSuggestions(suggestions); showDetails(anime, false); } });
-                    choice.setMaxWidth(Double.MAX_VALUE); suggestions.getChildren().add(choice);
-                }
-                if (!results.isEmpty()) {
-                    Button all = button(t("Vedi tutti i risultati", "See all results"), "suggestion-all",
-                        () -> onlineSearch(query.strip(), content, suggestions));
-                    all.setMaxWidth(Double.MAX_VALUE); suggestions.getChildren().add(all);
-                }
-                if (!results.isEmpty() && search.getScene() != null) {
-                    double popupWidth = Math.min(620, Math.max(460, search.getWidth() * .48));
-                    suggestions.setMinWidth(popupWidth); suggestions.setPrefWidth(popupWidth); suggestions.setMaxWidth(popupWidth);
-                    suggestions.setVisible(true); suggestions.setManaged(true);
-                    Point2D anchor = search.localToScreen(0, search.getHeight() + 6);
-                    if (anchor != null) suggestionPopup.show(search, anchor.getX(), anchor.getY());
-                }
+                previous.clear(); previous.addAll(results);
+                showSuggestions(results, query.strip(), search, suggestions, content);
             }, error -> {}));
             searchDelay.playFromStart();
         });
@@ -1116,28 +1142,63 @@ public class App extends Application {
         scrolling.addEventFilter(ScrollEvent.SCROLL, e -> hideSuggestions(suggestions));
         discoverHome(content, scrolling);
     }
+    private VBox discoverFilter(String title, ComboBox<?> box) {
+        box.setPrefWidth(142); box.setMaxWidth(142); box.getStyleClass().add("discover-filter-box");
+        VBox field = new VBox(7, label(title, "discover-filter-label"), box);
+        field.getStyleClass().add("discover-filter-field"); return field;
+    }
+    private void showSuggestions(List<Anime> results, String query, TextField search, VBox suggestions, VBox content) {
+        suggestions.getChildren().clear();
+        for (Anime anime : results) {
+            HBox choice = row(image(covers, anime.coverImage, 36, 50, 7),
+                new VBox(3, label(anime.title, "body"),
+                    label(meta(anime.format) + "  ·  " + (anime.year == null ? "—" : meta(anime.year)), "tiny")), spacer());
+            choice.getStyleClass().add("suggestion"); choice.setAccessibleText(anime.title);
+            choice.setAccessibleRole(AccessibleRole.BUTTON); choice.setFocusTraversable(true);
+            choice.setOnMouseClicked(click -> { hideSuggestions(suggestions); showDetails(anime, false); });
+            choice.setOnKeyPressed(key -> { if (key.getCode() == KeyCode.ENTER) { hideSuggestions(suggestions); showDetails(anime, false); } });
+            choice.setMaxWidth(Double.MAX_VALUE); suggestions.getChildren().add(choice);
+        }
+        if (results.isEmpty() || search.getScene() == null) { hideSuggestions(suggestions); return; }
+        Button all = button(t("Vedi tutti i risultati", "See all results"), "suggestion-all", () -> onlineSearch(query, content, suggestions));
+        all.setMaxWidth(Double.MAX_VALUE); suggestions.getChildren().add(all);
+        double popupWidth = Math.min(590, Math.max(390, search.getWidth() * .38));
+        suggestions.setMinWidth(popupWidth); suggestions.setPrefWidth(popupWidth); suggestions.setMaxWidth(popupWidth);
+        suggestions.setVisible(true); suggestions.setManaged(true);
+        Point2D anchor = search.localToScreen(0, search.getHeight() + 6);
+        if (anchor != null && suggestions.getProperties().get("popup") instanceof Popup popup) popup.show(search, anchor.getX(), anchor.getY());
+    }
     private void hideSuggestions(VBox suggestions) {
         suggestions.setVisible(false); suggestions.setManaged(false);
         Object popup = suggestions.getProperties().get("popup");
         if (popup instanceof Popup overlay) overlay.hide();
     }
     private void onlineSearch(String text, VBox content, VBox suggestions) {
-        String query = text.strip(); if (query.isEmpty()) return;
+        String query = text.strip(); if (query.isEmpty() && !discoverFilters.hasFilters()) return;
         searchGeneration++; searchDelay.stop();
         hideSuggestions(suggestions);
         if (carousel != null) { carousel.stop(); carousel = null; }
-        content.getChildren().setAll(row(label(t("Risultati per ", "Results for ") + "“" + query + "”", "section-title"), spacer(),
+        DiscoverQuery filter = discoverFilters.withText(query);
+        String heading = query.isEmpty() ? t("Risultati", "Results") : t("Risultati per ", "Results for ") + "“" + query + "”";
+        content.getChildren().setAll(row(label(heading, "section-title"), spacer(),
             button(t("Torna a Esplora", "Back to Explore"), "quiet", () -> navigate(Route.DISCOVER))));
         VBox results = new VBox(20, label(t("Ricerca in corso…", "Searching…"), "muted")); content.getChildren().add(results);
-        async(() -> api.search(query, 50), results, found -> {
-            results.getChildren().clear();
-            if (found.isEmpty()) results.getChildren().add(label(t("Nessun anime trovato. Prova un altro titolo.", "No anime found. Try another title."), "muted"));
-            else {
-                results.getChildren().add(label(t("Fino a 50 risultati. Per una ricerca più precisa, aggiungi parole al titolo.",
-                    "Up to 50 results. Add more words to narrow your search."), "tiny"));
-                results.getChildren().add(cardGrid(found, true));
-            }
-        }, error -> networkRetry(results, () -> onlineSearch(query, content, suggestions)));
+        TilePane grid = new TilePane(20, 24);
+        Button more = button(t("Carica altri", "Load more"), "load-more", () -> {});
+        more.setMaxWidth(Double.MAX_VALUE); more.setMinHeight(54);
+        int[] page = {1}; Set<Integer> shown = new HashSet<>();
+        Runnable load = () -> {
+            more.setDisable(true);
+            async(() -> api.search(filter, page[0], 30), results, found -> {
+                if (page[0] == 1) results.getChildren().setAll(grid, more);
+                int added = 0;
+                for (Anime anime : found) if (shown.add(anime.id)) { Node card = animeCard(anime); grid.getChildren().add(card); entrance(card, added++); }
+                page[0]++; more.setDisable(false);
+                if (found.size() < 30 || added == 0) { more.setVisible(false); more.setManaged(false); }
+                if (shown.isEmpty()) results.getChildren().setAll(label(t("Nessun anime trovato.", "No anime found."), "muted"));
+            }, error -> networkRetry(results, () -> onlineSearch(query, content, suggestions)));
+        };
+        more.setOnAction(e -> load.run()); load.run();
     }
     private void discoverHome(VBox content, ScrollPane scrolling) {
         content.getChildren().clear();
@@ -1342,15 +1403,14 @@ public class App extends Application {
     }
 
     private void settingsPage() {
-        VBox page = page(routeName(Route.SETTINGS), t("Personalizza MyAnimeDesk e gestisci i dati dell'app.", "Personalise MyAnimeDesk and manage your app data."));
+        VBox page = page(routeName(Route.SETTINGS), null);
         page.getStyleClass().add("settings-page");
         ComboBox<String> language = combo(List.of("it", "en"), prefs.language(), code -> code.equals("it") ? "Italiano" : "English");
         language.setId("settings-language");
         language.setOnAction(e -> {
             if (savePreferences(() -> prefs.values.setProperty("language", language.getValue()))) navigate(Route.SETTINGS);
         });
-        page.getChildren().add(panel(label(t("Lingua e scoperte", "Language & discovery"), "section-title"),
-            label(t("Lingua dell'interfaccia", "Interface language"), "tiny"), language,
+        page.getChildren().add(panel(label(t("Lingua", "Language"), "section-title"), language,
             label(t("Generi preferiti: ", "Favourite genres: ") + (prefs.genres().isEmpty() ? t("nessuno selezionato", "none selected")
                 : prefs.genres().stream().map(this::genre).reduce((a,b) -> a + ", " + b).orElse("")), "muted"),
             button(t("Scegli di nuovo i generi", "Choose your genres again"), "quiet", () -> onboarding(true))));
@@ -1371,8 +1431,6 @@ public class App extends Application {
                     })) { applyTheme(); settingsPage(); }
                 }))));
         page.getChildren().add(panel(label(t("Classifica", "Ranking"), "section-title"),
-            label(t("Esporta i tuoi voti o importa una classifica. L'importazione unisce i voti per ID anime: quelli presenti nel file sostituiscono i voti precedenti. Gli anime mancanti saranno aggiunti come visti.",
-                "Export your scores or import a ranking. Import merges scores by anime ID: scores in the file replace previous scores. Missing anime will be added as completed."), "muted"),
             row(button(t("Esporta classifica", "Export ranking"), "quiet", () -> exportData(true)),
                 button(t("Importa classifica", "Import ranking"), "quiet", () -> importData(true)),
                 button(t("Resetta classifica", "Reset ranking"), "danger", () ->
@@ -1381,9 +1439,7 @@ public class App extends Application {
                             "Your ranking will be cleared. Anime, folders and watched hours will remain unchanged. You can export a backup first."), () -> {
                             if (mutate(library::resetRanking)) { settingsPage(); message(t("Classifica resettata", "Ranking reset"), t("Tutti i voti sono stati rimossi.", "All ratings have been removed.")); }
                         })))));
-        page.getChildren().add(panel(label(t("Backup della tua lista", "Library backup"), "section-title"),
-            label(t("Un unico file con anime, preferiti, cartelle, visioni e voti. Conserva una copia prima di importare.",
-                "One file with your anime, favourites, folders, viewings and ratings. Keep a copy before importing."), "muted"),
+        page.getChildren().add(panel(label(t("File e backup", "Files & backup"), "section-title"),
             row(button(t("Esporta lista", "Export library"), "quiet", () -> exportData(false)),
                 button(t("Importa lista", "Import library"), "quiet", () -> importData(false)),
                 button(t("Svuota lista", "Clear library"), "danger", () ->
@@ -1396,20 +1452,28 @@ public class App extends Application {
         Button check = button(t("Controlla aggiornamenti", "Check for updates"), "quiet", () -> {});
         check.setOnAction(e -> checkUpdates(update, check));
         page.getChildren().add(panel(label(t("Aggiornamenti", "Updates"), "section-title"), update,
-            row(check, button(t("Apri le release", "Open releases"), "quiet", () -> openUrl(RELEASES))),
-            label(t("Dati anime: AniList. La libreria e le preferenze sono salvate sul tuo computer.",
-                "Anime data: AniList. Your library and preferences are stored on your computer."), "tiny")));
-        // Preserve the original two-column Settings layout; new options extend it.
+            row(check, button(t("Apri le release", "Open releases"), "quiet", () -> openUrl(RELEASES)))));
         List<Node> sections = new ArrayList<>(page.getChildren());
+        VBox rankingCard = (VBox) sections.get(3), filesCard = (VBox) sections.get(4);
+        HBox rankingButtons = (HBox) rankingCard.getChildren().remove(1);
+        HBox libraryButtons = (HBox) filesCard.getChildren().remove(1);
+        FlowPane rankingActions = new FlowPane(10, 10), libraryActions = new FlowPane(10, 10);
+        List<Node> rankingNodes = List.copyOf(rankingButtons.getChildren()); rankingButtons.getChildren().clear();
+        List<Node> libraryNodes = List.copyOf(libraryButtons.getChildren()); libraryButtons.getChildren().clear();
+        rankingActions.getChildren().setAll(rankingNodes); libraryActions.getChildren().setAll(libraryNodes);
+        VBox libraryFiles = new VBox(12, label(t("Lista", "Library"), "settings-subtitle"), libraryActions);
+        VBox rankingFiles = new VBox(12, label(t("Classifica", "Ranking"), "settings-subtitle"), rankingActions);
+        libraryFiles.getStyleClass().add("settings-file-group"); rankingFiles.getStyleClass().add("settings-file-group");
+        libraryFiles.setMaxWidth(Double.MAX_VALUE); rankingFiles.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(libraryFiles, Priority.ALWAYS); HBox.setHgrow(rankingFiles, Priority.ALWAYS);
+        filesCard.getChildren().addAll(new HBox(16, libraryFiles, rankingFiles), new Separator(),
+            label(t("Cartella dati: ", "Data folder: ") + profile, "settings-data-path"));
         GridPane grid = new GridPane(); grid.setHgap(18); grid.setVgap(18);
         for (int i = 0; i < 2; i++) {
             ColumnConstraints column = new ColumnConstraints(); column.setPercentWidth(50); column.setHgrow(Priority.ALWAYS);
             grid.getColumnConstraints().add(column);
         }
-        VBox info = panel(label(t("Informazioni app", "App information"), "section-title"),
-            label(t("Cartella dati: ", "Data folder: ") + profile, "muted"),
-            label(t("Cache immagini e dati Scopri attiva per avvii più veloci.", "Image and Discover caching is enabled for faster startup."), "muted"));
-        Node[] ordered = {sections.get(5), sections.get(2), sections.get(4), info, sections.get(1), sections.get(3)};
+        Node[] ordered = {sections.get(1), sections.get(2), filesCard, sections.get(5)};
         page.getChildren().setAll(sections.get(0), grid);
         for (int i = 0; i < ordered.length; i++) {
             VBox card = (VBox) ordered[i]; card.setMinWidth(0); card.setMaxWidth(Double.MAX_VALUE);
@@ -1422,19 +1486,18 @@ public class App extends Application {
                     actions.getChildren().setAll(buttons); card.getChildren().set(index, actions);
                 }
             }
-            grid.add(card, i % 2, i / 2);
         }
+        grid.add(ordered[0], 0, 0); grid.add(ordered[1], 1, 0);
+        grid.add(ordered[2], 0, 1, 2, 1); grid.add(ordered[3], 0, 2, 2, 1);
         shell.setCenter(scroll(page));
     }
     private void onboarding(boolean genresOnly) {
         Set<String> selected = new LinkedHashSet<>(prefs.genres());
         VBox body = new VBox(20);
-        StackPane dialog = modal(genresOnly ? t("Le storie che ti piacciono", "The stories you love") : "Benvenuto · Welcome", body, 820, genresOnly);
+        StackPane dialog = modal(genresOnly ? t("Generi anime", "Anime genres") : "MyAnimeDesk", body, 820, genresOnly);
         Runnable genresStep = () -> {
             body.getChildren().clear();
-            body.getChildren().addAll(label(t("Che mondi ti va di esplorare?", "Which worlds would you like to explore?"), "title"),
-                label(t("Scegli tutti i generi che vuoi. Li troverai per primi in Esplora e potrai cambiarli nelle impostazioni.",
-                    "Choose as many genres as you like. They will appear first in Explore, and you can change them in Settings."), "muted"));
+            body.getChildren().add(label(t("Che generi anime ti piacciono?", "Which anime genres do you like?"), "title"));
             FlowPane genres = new FlowPane(10, 10);
             for (String value : Preferences.GENRES) {
                 ToggleButton chip = new ToggleButton(genre(value)); chip.getStyleClass().add("genre-choice"); chip.setSelected(selected.contains(value));
@@ -1447,24 +1510,23 @@ public class App extends Application {
                     prefs.values.setProperty("onboarding.complete", "true");
                 })) { closeModal(dialog); navigate(genresOnly ? Route.SETTINGS : Route.DISCOVER); }
             };
-            HBox actions = row(label(t("Nessun obbligo: puoi anche non selezionare nulla.", "No pressure: you can also leave this empty."), "tiny"), spacer(),
+            HBox actions = row(spacer(),
                 button(genresOnly ? t("Salva preferenze", "Save preferences") : t("Iniziamo", "Let's begin") + " →", "primary", complete));
             body.getChildren().add(actions);
         };
         if (genresOnly) genresStep.run();
         else {
-            Label welcome = label(t("La tua collezione, il tuo universo.", "Your collection, your universe."), "hero-title");
+            Label welcome = label(t("Benvenuto", "Welcome"), "hero-title");
             Label prompt = label("Scegli la tua lingua / Choose your language", "subtitle");
             ComboBox<String> language = combo(List.of("it", "en"), prefs.language(), code -> code.equals("it") ? "Italiano" : "English");
             language.setId("welcome-language");
             Button next = button(t("Continua", "Continue") + " →", "primary", genresStep);
             language.setOnAction(e -> {
                 prefs.values.setProperty("language", language.getValue());
-                welcome.setText(t("La tua collezione, il tuo universo.", "Your collection, your universe."));
+                welcome.setText(t("Benvenuto", "Welcome"));
                 next.setText(t("Continua", "Continue") + " →");
             });
-            body.getChildren().addAll(label("✦", "loading-emblem"), welcome, prompt, language,
-                label("Italiano · English", "tiny"), next);
+            body.getChildren().addAll(label("✦", "loading-emblem"), welcome, prompt, language, next);
         }
     }
     private boolean savePreferences(Runnable change) {
