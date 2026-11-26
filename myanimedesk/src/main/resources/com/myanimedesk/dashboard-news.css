@@ -1,0 +1,80 @@
+.dashboard-news-title {
+    -fx-text-fill: #f9f2ff;
+    -fx-font-size: 23;
+    -fx-font-weight: bold;
+}
+.dashboard-news:rail {
+    -fx-padding: 17;
+    -fx-background-color: linear-gradient(to bottom right, #251934, #1a142a 68%);
+    -fx-background-radius: 22;
+    -fx-border-color: rgba(164,132,210,0.22);
+    -fx-border-radius: 22;
+}
+.dashboard-news:rail .dashboard-news-title { -fx-font-size: 20; }
+.button.dashboard-news-refresh {
+    -fx-background-color: #211638;
+    -fx-background-radius: 10;
+    -fx-border-color: #503b72;
+    -fx-border-radius: 10;
+    -fx-text-fill: #eadbff;
+    -fx-padding: 7 12;
+}
+.button.dashboard-news-refresh:hover, .keyboard-navigation .button.dashboard-news-refresh:focused {
+    -fx-background-color: #35234e;
+    -fx-border-color: #c299ff;
+}
+.button.dashboard-news-article {
+    -fx-alignment: top-left;
+    -fx-min-height: 112;
+    -fx-pref-height: 120;
+    -fx-padding: 14 16 13;
+    -fx-background-color: linear-gradient(to bottom right, #251933, #19122b);
+    -fx-background-radius: 14;
+    -fx-border-color: rgba(175, 143, 222, 0.25);
+    -fx-border-radius: 14;
+}
+.dashboard-news:rail .button.dashboard-news-article {
+    -fx-min-height: 85;
+    -fx-pref-height: 104;
+    -fx-padding: 12 16;
+    -fx-background-color: rgba(202,167,245,0.05);
+    -fx-border-color: rgba(202,167,245,0.11);
+}
+.button.dashboard-news-article.dashboard-news-lead {
+    -fx-background-color: linear-gradient(to bottom right, derive(-desk-accent, -56%), #211631 72%);
+    -fx-border-color: rgba(196, 159, 255, 0.48);
+}
+.dashboard-news:rail .button.dashboard-news-lead {
+    -fx-pref-height: 112;
+    -fx-background-color: linear-gradient(to bottom right, derive(-desk-accent, -51%), #2b1d43 83%);
+    -fx-border-color: rgba(196,159,255,0.38);
+}
+.button.dashboard-news-article:hover, .keyboard-navigation .button.dashboard-news-article:focused,
+.dashboard-news:rail .button.dashboard-news-article:hover, .keyboard-navigation .dashboard-news:rail .button.dashboard-news-article:focused {
+    -fx-background-color: #38234d;
+    -fx-border-color: #c299ff;
+}
+.dashboard-news-topic {
+    -fx-padding: 3 7;
+    -fx-background-radius: 6;
+    -fx-font-size: 11;
+    -fx-font-weight: bold;
+}
+.dashboard-news-topic.dashboard-news-anime {
+    -fx-background-color: #45296c;
+    -fx-text-fill: #e8d6ff;
+}
+.dashboard-news-topic.dashboard-news-manga {
+    -fx-background-color: #314052;
+    -fx-text-fill: #c0e0f2;
+}
+.dashboard-news-meta, .dashboard-news-status {
+    -fx-text-fill: #c1b2d3;
+    -fx-font-size: 12;
+    -fx-font-weight: normal;
+}
+.dashboard-news-headline {
+    -fx-text-fill: #faf4ff;
+    -fx-font-size: 16;
+    -fx-font-weight: bold;
+}

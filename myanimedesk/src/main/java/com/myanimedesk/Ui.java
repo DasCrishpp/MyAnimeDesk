@@ -31,6 +31,8 @@ final class Ui {
             // The nearest scrolling control owns the wheel; don't steal it from nested menus.
             for (Node node = e.getTarget() instanceof Node n ? n : null; node != null && node != scroll; node = node.getParent()) {
                 if (node instanceof ScrollPane nested && nested.getVbarPolicy() != ScrollPane.ScrollBarPolicy.NEVER) return;
+                if (node instanceof ScrollPane && "discover-strip".equals(node.getId())
+                    && (e.isShiftDown() || Math.abs(e.getDeltaX()) > Math.abs(e.getDeltaY()))) return;
                 if (node instanceof ComboBoxBase<?> || node instanceof Spinner<?> || node instanceof ListView<?>) return;
             }
             double excess = content.getLayoutBounds().getHeight() - scroll.getViewportBounds().getHeight();

@@ -1,0 +1,67 @@
+.dashboard-stats {
+    -stats-completed: #84e4c8;
+    -stats-watching: #ffcb83;
+    -stats-planned: #93b2ff;
+    -stats-dropped: #fd92ad;
+    -fx-padding: 19 21 21;
+    -fx-spacing: 14;
+    -fx-background-color: radial-gradient(center 86% 0%, radius 110%, derive(-desk-accent, -44%) 0%, #231736 46%, #191328 100%);
+    -fx-background-radius: 23;
+    -fx-border-color: linear-gradient(to bottom right, rgba(225,193,255,0.46), rgba(157,122,210,0.18));
+    -fx-border-radius: 23;
+}
+.dashboard-stats-heading {
+    -fx-text-fill: #e0d2f2;
+    -fx-font-size: 14;
+    -fx-font-weight: bold;
+}
+.dashboard-stats-hours {
+    -fx-text-fill: #fbf6ff;
+    -fx-font-size: 49;
+    -fx-font-weight: 800;
+}
+.dashboard-stats-hours-unit {
+    -fx-text-fill: #d8baf5;
+    -fx-font-size: 22;
+    -fx-font-weight: bold;
+}
+.dashboard-stats-ring {
+    -fx-fill: transparent;
+    -fx-stroke-width: 10;
+    -fx-stroke-line-cap: butt;
+}
+.dashboard-stats-ring.track { -fx-stroke: rgba(203,177,245,0.18); }
+.dashboard-stats-ring.completed { -fx-stroke: -stats-completed; }
+.dashboard-stats-ring.watching { -fx-stroke: -stats-watching; }
+.dashboard-stats-ring.planned { -fx-stroke: -stats-planned; }
+.dashboard-stats-ring.dropped { -fx-stroke: -stats-dropped; }
+.dashboard-stats-dot.completed { -fx-fill: -stats-completed; }
+.dashboard-stats-dot.watching { -fx-fill: -stats-watching; }
+.dashboard-stats-dot.planned { -fx-fill: -stats-planned; }
+.dashboard-stats-dot.dropped { -fx-fill: -stats-dropped; }
+.dashboard-stats-total {
+    -fx-text-fill: #fff6ff;
+    -fx-font-size: 27;
+    -fx-font-weight: bold;
+}
+.dashboard-stats-total-label {
+    -fx-text-fill: #d4c4e7;
+    -fx-font-size: 12;
+}
+.dashboard-stats-reading { -fx-padding: 0 4; }
+.dashboard-stats-count, .dashboard-stats-badge-count {
+    -fx-text-fill: #f7f1ff;
+    -fx-font-size: 16;
+    -fx-font-weight: bold;
+}
+.dashboard-stats-caption {
+    -fx-text-fill: #e5d8f4;
+    -fx-font-size: 13;
+}
+.dashboard-stats-badge {
+    -fx-padding: 9 8;
+    -fx-background-color: rgba(191,147,249,0.11);
+    -fx-background-radius: 10;
+    -fx-border-color: rgba(191,147,249,0.21);
+    -fx-border-radius: 10;
+}

@@ -223,11 +223,12 @@ public class AniListClient implements AutoCloseable {
         List<Anime> cached = cache.get(cacheKey);
         if (cached != null) return new ArrayList<>(cached);
 
+        boolean featured = "TRENDING".equalsIgnoreCase(mode);
         String sort = "POPULARITY_DESC";
         if ("RECENT".equalsIgnoreCase(mode)) {
             sort = "START_DATE_DESC";
         }
-        if ("TRENDING".equalsIgnoreCase(mode)) sort = "TRENDING_DESC";
+        if (featured) sort = "TRENDING_DESC";
 
         boolean useTag = filter != null && !filter.isBlank() && ("TAG".equalsIgnoreCase(mode) || Preferences.TAGS.contains(filter));
         boolean useGenre = !useTag && filter != null && !filter.isBlank();
@@ -257,14 +258,14 @@ public class AniListClient implements AutoCloseable {
                 .toString();
 
         List<Anime> results;
-        try { results = executePageQuery(payload); }
+        try { results = executePageQuery(payload, featured); }
         catch (IOException failure) {
             // Read the previous app's discover cache without changing it.
             results = legacyBrowse(mode, filter, page, perPage);
             if (results == null || useTag) throw failure;
         }
         if (useGenre) results.removeIf(a -> a.genres == null || !a.genres.contains(filter));
-        cache.put(cacheKey, new ArrayList<>(results));
+        if (!featured || !results.isEmpty()) cache.put(cacheKey, new ArrayList<>(results));
         return results;
     }
 
@@ -293,7 +294,11 @@ public class AniListClient implements AutoCloseable {
     }
 
     private List<Anime> executePageQuery(String payload) throws IOException, InterruptedException {
-        JsonNode root = responseData(payload);
+        return executePageQuery(payload, false);
+    }
+
+    private List<Anime> executePageQuery(String payload, boolean featured) throws IOException, InterruptedException {
+        JsonNode root = responseData(payload, featured);
         JsonNode media = root.path("data").path("Page").path("media");
 
         List<Anime> out = new ArrayList<>();
@@ -308,6 +313,10 @@ public class AniListClient implements AutoCloseable {
 
     /** Cached API responses survive restarts; only successful, valid responses are cached. */
     private JsonNode responseData(String payload) throws IOException, InterruptedException {
+        return responseData(payload, false);
+    }
+
+    private JsonNode responseData(String payload, boolean featured) throws IOException, InterruptedException {
         Path saved;
         try {
             String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload.getBytes(StandardCharsets.UTF_8)));
@@ -319,27 +328,41 @@ public class AniListClient implements AutoCloseable {
         if (cataloguePage && Files.exists(saved) && Files.size(saved) <= 8 * 1024 * 1024) {
             try {
                 if (Files.getLastModifiedTime(saved).toInstant().isAfter(Instant.now().minus(6, ChronoUnit.HOURS))) {
-                    JsonNode root = mapper.readTree(saved.toFile()); throwIfGraphQLError(root); offline = false; return root;
+                    JsonNode root = mapper.readTree(saved.toFile());
+                    throwIfGraphQLError(root);
+                    if (!featured || hasFeaturedTitles(root)) { offline = false; return root; }
                 }
             } catch (IOException ignored) { /* A broken cache is bypassed and replaced by the next valid response. */ }
         }
         try {
             if (System.currentTimeMillis() < retryAfter) throw new IOException("AniList temporarily unavailable");
-            HttpResponse<String> response = sendWithRetry(payload);
+            HttpResponse<String> response = featured
+                ? client.send(createRequest(payload, Duration.ofSeconds(7)), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+                : sendWithRetry(payload);
             if (response.statusCode() != 200) {
                 if (response.statusCode() == 403 || response.statusCode() == 429) retryAfter = System.currentTimeMillis() + 30_000;
                 throw new IOException("AniList HTTP " + response.statusCode() + " - " + response.body());
             }
-            JsonNode root = mapper.readTree(response.body()); throwIfGraphQLError(root); offline = false;
+            JsonNode root = mapper.readTree(response.body());
+            throwIfGraphQLError(root);
+            if (featured && !hasFeaturedTitles(root)) throw new IOException("No trending anime returned");
+            offline = false;
             try { AtomicFiles.write(saved, response.body().getBytes(StandardCharsets.UTF_8)); } catch (IOException ignored) { }
             return root;
         } catch (IOException failure) {
             offline = true;
             if (Files.exists(saved) && Files.size(saved) <= 8 * 1024 * 1024) {
-                JsonNode root = mapper.readTree(saved.toFile()); throwIfGraphQLError(root); return root;
+                JsonNode root = mapper.readTree(saved.toFile());
+                throwIfGraphQLError(root);
+                if (!featured || hasFeaturedTitles(root)) return root;
             }
             throw failure;
         }
+    }
+
+    private boolean hasFeaturedTitles(JsonNode root) {
+        JsonNode media = root.path("data").path("Page").path("media");
+        return media.isArray() && !media.isEmpty();
     }
 
     private void throwIfGraphQLError(JsonNode root) throws IOException {
@@ -359,7 +382,7 @@ public class AniListClient implements AutoCloseable {
         IOException lastIo = null;
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
-                HttpResponse<String> resp = client.send(createRequest(payload), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                HttpResponse<String> resp = client.send(createRequest(payload, Duration.ofSeconds(18)), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
                 if (resp.statusCode() < 500) return resp;
                 if (attempt == 3) return resp;
             } catch (IOException e) {
@@ -375,10 +398,10 @@ public class AniListClient implements AutoCloseable {
         throw new IOException("Errore di rete sconosciuto con AniList");
     }
 
-    private HttpRequest createRequest(String payload) {
+    private HttpRequest createRequest(String payload, Duration timeout) {
         return HttpRequest.newBuilder()
                 .uri(endpoint)
-                .timeout(Duration.ofSeconds(18))
+                .timeout(timeout)
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("Accept", "application/json")
                 .header("User-Agent", "MyAnimeDesk/0.4.1")

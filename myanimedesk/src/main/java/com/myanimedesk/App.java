@@ -54,15 +54,20 @@ import javafx.animation.Timeline;
 import javafx.animation.TranslateTransition;
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
+import javafx.beans.property.DoubleProperty;
+import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.concurrent.Worker;
+import javafx.css.PseudoClass;
 import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Point2D;
 import javafx.geometry.Pos;
 import javafx.geometry.Rectangle2D;
+import javafx.geometry.VPos;
 import javafx.scene.AccessibleRole;
 import javafx.scene.Node;
 import javafx.scene.Parent;
@@ -90,7 +95,6 @@ import javafx.scene.control.TitledPane;
 import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Tooltip;
-import javafx.scene.effect.GaussianBlur;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
@@ -117,6 +121,7 @@ import javafx.scene.layout.TilePane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
+import javafx.scene.shape.SVGPath;
 import javafx.scene.web.WebView;
 import javafx.stage.FileChooser;
 import javafx.stage.Popup;
@@ -140,17 +145,24 @@ public class App extends Application {
     };
     private AniListClient api;
     private CoverCache covers;
+    private AnimeNews animeNews;
     private Stage window;
     private StackPane root;
     private BorderPane shell;
+    private NavigationBar navigationBar;
     private FileChannel lockChannel;
     private FileLock instanceLock;
     private volatile boolean closed;
     private boolean ready;
     private Route route = Route.HOME;
+    private int dashboardSpotlightId;
     private Timeline carousel;
+    private BannerDeck carouselHoverTarget;
+    private boolean carouselInView;
     private PauseTransition searchDelay;
-    private Popup activeCardPopup;
+    private CardHoverMenu cardHover;
+    private ContextMenu cardContextMenu;
+    private long lastCardScroll;
     private int pageGeneration, searchGeneration;
     private DiscoverQuery discoverFilters = DiscoverQuery.empty();
     private final Deque<StackPane> modals = new ArrayDeque<>();
@@ -172,14 +184,7 @@ public class App extends Application {
         @Override protected double computeMinHeight(double width) { return ratioHeight(width); }
         @Override protected double computePrefHeight(double width) { return ratioHeight(width); }
         @Override protected double computeMaxHeight(double width) { return Double.MAX_VALUE; }
-        private double ratioHeight(double width) { return (width > 0 ? width : 960) * 9.0 / 16.0; }
-    }
-    private static final class BannerDeck extends StackPane {
-        @Override public Orientation getContentBias() { return Orientation.HORIZONTAL; }
-        @Override protected double computeMinHeight(double width) { return ratioHeight(width); }
-        @Override protected double computePrefHeight(double width) { return ratioHeight(width); }
-        @Override protected double computeMaxHeight(double width) { return ratioHeight(width); }
-        private double ratioHeight(double width) { return Math.min(width > 0 ? width : 1280, 1280) * 9.0 / 16.0; }
+        private double ratioHeight(double width) { return Math.min(480, (width > 0 ? width : 780) * .54); }
     }
     public static void main(String[] args) { launch(args); }
     private boolean en() { return prefs.language().equals("en"); }
@@ -218,22 +223,32 @@ public class App extends Application {
         }
         api = createApi(profile);
         covers = new CoverCache(profile.resolve("image_cache"));
+        animeNews = createAnimeNews();
         root = new StackPane(); root.getStyleClass().add("app-root");
         Scene scene = new Scene(root, 1280, 820);
+        scene.addEventFilter(ScrollEvent.SCROLL, event -> {
+            lastCardScroll = System.nanoTime();
+            hideCardPopup();
+        });
         scene.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> root.getStyleClass().remove("keyboard-navigation"));
         scene.addEventFilter(KeyEvent.KEY_PRESSED, e -> {
             if (e.getCode() == KeyCode.TAB && !root.getStyleClass().contains("keyboard-navigation")) root.getStyleClass().add("keyboard-navigation");
         });
         scene.getStylesheets().add(Objects.requireNonNull(getClass().getResource("/com/myanimedesk/desk.css")).toExternalForm());
         scene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
-            if (event.getCode() == KeyCode.ESCAPE && !modals.isEmpty()) { closeTopModal(); event.consume(); }
+            if (event.getCode() != KeyCode.ESCAPE) return;
+            if (!modals.isEmpty()) { closeTopModal(); event.consume(); }
+            else if (cardHover != null && cardHover.content.isVisible()) { cardHover.hide(); event.consume(); }
         });
         stage.setScene(scene);
         stage.setTitle("MyAnimeDesk" + System.getProperty("myanimedesk.windowSuffix", ""));
         stage.setMinWidth(1150); stage.setMinHeight(780);
         stage.setOnHidden(e -> { shutdown(); Platform.exit(); });
         stage.iconifiedProperty().addListener((obs, old, value) -> syncCarousel());
-        stage.focusedProperty().addListener((obs, old, value) -> syncCarousel());
+        stage.focusedProperty().addListener((obs, old, value) -> {
+            if (!value && cardHover != null) cardHover.hide();
+            syncCarousel();
+        });
         Platform.setImplicitExit(true);
         loadingScreen();
         stage.show();
@@ -262,6 +277,7 @@ public class App extends Application {
         entrance(loading, 0);
     }
     AniListClient createApi(Path directory) { return new AniListClient(directory); }
+    AnimeNews createAnimeNews() { return new AnimeNews(); }
 
     private void navigate(Route next) {
         if (!ready) return;
@@ -269,32 +285,170 @@ public class App extends Application {
         closeAllModals();
         route = next; pageGeneration++; searchGeneration++;
         if (carousel != null) { carousel.stop(); carousel = null; }
+        carouselHoverTarget = null;
         if (searchDelay != null) searchDelay.stop();
         covers.forgetPendingViews(); updateLibraryGrid = null;
-        shell = new BorderPane(); shell.getStyleClass().add("shell");
-        shell.setLeft(sidebar()); shell.setBottom(statusBar()); root.getChildren().setAll(shell);
-        applyTheme();
-        renderPage();
-    }
-    private VBox sidebar() {
-        VBox sidebar = new VBox(12);
-        sidebar.getStyleClass().add("sidebar"); sidebar.setPrefWidth(230);
-        Label logo = label("MyAnimeDesk", "brand");
-        logo.setPadding(new Insets(0, 0, 20, 10));
-        sidebar.getChildren().add(logo);
-        for (Route item : Route.values()) {
-            String caption = item == Route.DISCOVER ? t("Scopri / Cerca", "Discover / Search") : routeName(item);
-            Button nav = button(caption, route == item ? "nav-active" : "nav", () -> navigate(item));
-            nav.setId("nav-" + item.name().toLowerCase(Locale.ROOT)); nav.setPrefWidth(200); nav.setMinHeight(46);
-            sidebar.getChildren().add(nav);
+        if (shell == null) {
+            shell = new BorderPane();
+            shell.getStyleClass().add("shell");
+            navigationBar = new NavigationBar();
+            shell.setTop(navigationBar);
+            root.getChildren().setAll(shell);
+            applyTheme();
         }
-        return sidebar;
+        navigationBar.select(next);
+        renderPage();
+        // The library already staggers its covers. Other routes share one short entrance.
+        if (next != Route.LIBRARY) entrance(shell.getCenter(), 0);
     }
-    private HBox statusBar() {
-        Label status = label(t("Pronto.", "Ready."), "muted");
-        HBox footer = row(status, spacer(), label("© 2026 MyAnimeDesk", "copyright"));
-        footer.getStyleClass().add("status-bar");
-        return footer;
+
+    private final class NavigationBar extends StackPane {
+        private static final PseudoClass CURRENT = PseudoClass.getPseudoClass("current");
+        private static final double TAB_HEIGHT = 44;
+        private final Map<Route, Button> buttons = new EnumMap<>(Route.class);
+        private final HBox tabs = new HBox(3);
+        private final Region selection = new Region();
+        private final DoubleProperty selectionWidth = new SimpleDoubleProperty();
+        private final Timeline selectionMotion = new Timeline();
+        private Route selected;
+
+        NavigationBar() {
+            getStyleClass().add("navigation-bar");
+            setMinHeight(78);
+            setPrefHeight(78);
+
+            Label brandName = new Label("MyAnime");
+            Label brandAccent = new Label("Desk");
+            brandAccent.getStyleClass().add("navigation-brand-accent");
+            HBox brand = new HBox(brandName, brandAccent);
+            brand.setAlignment(Pos.CENTER_LEFT);
+            brand.getStyleClass().add("navigation-brand");
+            brand.setAccessibleText("MyAnimeDesk");
+
+            tabs.getChildren().addAll(
+                createButton(Route.HOME, "M 2,2 H 8 V 8 H 2 Z M 11,2 H 17 V 8 H 11 Z M 2,11 H 8 V 17 H 2 Z M 11,11 H 17 V 17 H 11 Z"),
+                createButton(Route.LIBRARY, "M 3,2 H 13 Q 15,2 15,4 V 16 L 9,12.5 L 3,16 Z M 6,6 H 12"),
+                createButton(Route.RANKING, "M 2,16 H 18 M 3.5,16 V 9 H 7.5 V 16 M 7.5,16 V 3 H 12 V 16 M 12,16 V 7 H 16.5 V 16"),
+                createButton(Route.DISCOVER, "M 13.5,8 A 5.5,5.5 0 1,1 2.5,8 A 5.5,5.5 0 1,1 13.5,8 M 12,12 L 17,17"));
+            tabs.getStyleClass().add("navigation-tabs");
+            tabs.setAlignment(Pos.CENTER);
+            Region dockSurface = new Region();
+            dockSurface.getStyleClass().add("navigation-dock-surface");
+            dockSurface.setMouseTransparent(true);
+            selection.getStyleClass().add("navigation-selection");
+            selection.setManaged(false);
+            selection.setMouseTransparent(true);
+            selectionWidth.addListener((obs, before, width) -> selection.resize(width.doubleValue(), TAB_HEIGHT));
+            selectionMotion.setOnFinished(event -> requestLayout());
+            StackPane dock = new StackPane(dockSurface, selection, tabs);
+            dock.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+
+            Button settings = createButton(Route.SETTINGS,
+                "M 8,1.8 H 11 L 11.5,4 L 13.2,4.9 L 15.3,4.2 L 16.9,6.8 L 15.4,8.4 V 10.3 L 17,11.9 L 15.4,14.5 L 13.2,13.9 L 11.5,14.8 L 11,17 H 8 L 7.4,14.8 L 5.7,13.9 L 3.6,14.5 L 2,11.9 L 3.6,10.3 V 8.4 L 2,6.8 L 3.6,4.2 L 5.7,4.9 L 7.4,4 Z M 12,9.4 A 2.5,2.5 0 1,1 7,9.4 A 2.5,2.5 0 1,1 12,9.4");
+            settings.getStyleClass().add("navigation-settings");
+            settings.setMinSize(48, 48);
+            settings.setPrefSize(48, 48);
+            settings.setMaxSize(48, 48);
+            settings.setTooltip(new Tooltip());
+
+            // Matching end widths keep the dock centered over the content.
+            StackPane settingsArea = new StackPane(settings);
+            settingsArea.setAlignment(Pos.CENTER_RIGHT);
+            settingsArea.prefWidthProperty().bind(brand.widthProperty());
+            BorderPane body = new BorderPane();
+            body.setLeft(brand);
+            body.setCenter(new StackPane(dock));
+            body.setRight(settingsArea);
+            getChildren().add(body);
+        }
+
+        private Button createButton(Route item, String path) {
+            Button nav = button("", "navigation-tab", () -> navigate(item));
+            nav.setId("nav-" + item.name().toLowerCase(Locale.ROOT));
+            nav.setMinSize(Region.USE_PREF_SIZE, TAB_HEIGHT);
+            nav.setPrefHeight(TAB_HEIGHT);
+            nav.setMaxHeight(TAB_HEIGHT);
+            StackPane graphic = icon(path);
+            nav.setGraphic(graphic);
+            TranslateTransition lift = new TranslateTransition(Duration.millis(145), graphic);
+            lift.setInterpolator(Interpolator.EASE_OUT);
+            nav.hoverProperty().addListener((obs, before, hovering) -> {
+                lift.stop();
+                lift.setToY(hovering ? -2 : 0);
+                lift.playFromStart();
+            });
+            buttons.put(item, nav);
+            return nav;
+        }
+
+        private StackPane icon(String path) {
+            SVGPath line = new SVGPath();
+            line.setContent(path);
+            line.getStyleClass().add("navigation-icon");
+            StackPane frame = new StackPane(line);
+            frame.setMinSize(19, 19);
+            frame.setPrefSize(19, 19);
+            frame.setMaxSize(19, 19);
+            frame.setMouseTransparent(true);
+            return frame;
+        }
+
+        void select(Route next) {
+            Route previous = selected;
+            selected = next;
+            buttons.forEach((item, nav) -> {
+                String caption = item == Route.DISCOVER ? t("Scopri / Cerca", "Discover / Search") : routeName(item);
+                if (item == Route.SETTINGS) nav.getTooltip().setText(caption);
+                else nav.setText(caption);
+                nav.setAccessibleText(caption);
+                nav.pseudoClassStateChanged(CURRENT, item == next);
+                nav.setAccessibleHelp(item == next ? t("Sezione attiva", "Current section") : null);
+            });
+            if (previous != null && previous != next) animateSelection();
+            requestLayout();
+        }
+
+        @Override protected void layoutChildren() {
+            super.layoutChildren();
+            if (selected == null || selectionMotion.getStatus() == Animation.Status.RUNNING) return;
+            if (selected == Route.SETTINGS) {
+                selection.setOpacity(0);
+                return;
+            }
+            Button target = buttons.get(selected);
+            selection.setLayoutY(tabs.getLayoutY() + target.getLayoutY());
+            selection.setLayoutX(tabs.getLayoutX() + target.getLayoutX());
+            selectionWidth.set(target.getWidth());
+            selection.setScaleY(1);
+            selection.setOpacity(1);
+        }
+
+        private void animateSelection() {
+            selectionMotion.stop();
+            if (selected == Route.SETTINGS) {
+                selectionMotion.getKeyFrames().setAll(new KeyFrame(Duration.millis(130),
+                    new KeyValue(selection.opacityProperty(), 0, Interpolator.EASE_OUT)));
+                selectionMotion.playFromStart();
+                return;
+            }
+            Button target = buttons.get(selected);
+            if (target.getWidth() == 0) return;
+            double x = tabs.getLayoutX() + target.getLayoutX();
+            if (selection.getOpacity() < .05) {
+                selection.setLayoutX(x);
+                selectionWidth.set(target.getWidth());
+                selection.setScaleY(.87);
+            }
+            selectionMotion.getKeyFrames().setAll(
+                new KeyFrame(Duration.millis(70),
+                    new KeyValue(selection.scaleYProperty(), .92, Interpolator.EASE_OUT)),
+                new KeyFrame(Duration.millis(195),
+                    new KeyValue(selection.layoutXProperty(), x, Interpolator.EASE_BOTH),
+                    new KeyValue(selectionWidth, target.getWidth(), Interpolator.EASE_BOTH),
+                    new KeyValue(selection.scaleYProperty(), 1, Interpolator.EASE_OUT),
+                    new KeyValue(selection.opacityProperty(), 1, Interpolator.EASE_OUT)));
+            selectionMotion.playFromStart();
+        }
     }
     private VBox page(String title, String subtitle) {
         VBox box = new VBox(24); box.getStyleClass().add("page");
@@ -316,26 +470,269 @@ public class App extends Application {
         refreshCards(shell);
     }
     private void home() {
+        List<Anime> collection = library.all();
+        List<Anime> watching = collection.stream().filter(anime -> anime.status == Anime.Status.WATCHING).toList();
         VBox page = page("Dashboard", null);
-        HBox stats = new HBox(20,
-            dashboardStat(t("TEMPO TOTALE DI VISIONE", "TOTAL WATCH TIME"), number(library.watchedHours()) + t(" ore", " hours"), "#4d7cff"),
-            dashboardStat(t("ANIME IN VISIONE", "ANIME WATCHING"), Integer.toString(library.byStatus(Anime.Status.WATCHING).size()), "#ff9f43"),
-            dashboardStat(t("ANIME VISTI", "ANIME COMPLETED"), Integer.toString(library.byStatus(Anime.Status.WATCHED).size()), "#1dd1a1"));
-        page.getChildren().addAll(stats, label(t("Continua a Guardare", "Continue Watching"), "section-title"));
-        List<Anime> watching = library.byStatus(Anime.Status.WATCHING);
-        HBox cards = new HBox(10); cards.setPadding(new Insets(10, 0, 10, 0));
-        if (watching.isEmpty()) cards.getChildren().add(label(t("Nessun anime in visione al momento.", "No anime currently being watched."), "muted"));
-        else for (Anime anime : watching) cards.getChildren().add(animeCard(anime));
-        ScrollPane rowScroll = new ScrollPane(cards); rowScroll.setFitToHeight(true);
-        rowScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        page.getChildren().add(rowScroll);
-        shell.setCenter(scroll(page));
+        page.setSpacing(24);
+        ScrollPane scrolling = scroll(page);
+
+        DashboardStats stats = new DashboardStats(number(library.watchedHours()), collection, en());
+
+        DashboardSpotlight spotlight = new DashboardSpotlight(watching);
+        DashboardNews news = new DashboardNews(animeNews, en(), this::openUrl);
+        GridPane dashboard = new GridPane();
+        dashboard.setHgap(20);
+        dashboard.setVgap(24);
+        ColumnConstraints spotlightColumn = new ColumnConstraints();
+        spotlightColumn.setHgrow(Priority.ALWAYS);
+        ColumnConstraints newsColumn = new ColumnConstraints(360, 400, 440);
+        dashboard.getColumnConstraints().addAll(spotlightColumn, new ColumnConstraints(300, 350, 385));
+        dashboard.add(spotlight, 0, 0);
+        dashboard.add(stats, 1, 0);
+
+        int selected = 0;
+        if (!watching.isEmpty()) {
+            TilePane covers = new TilePane(18, 22);
+            covers.setAlignment(Pos.TOP_LEFT);
+            for (int i = 0; i < watching.size(); i++) {
+                Anime anime = watching.get(i);
+                if (anime.id == dashboardSpotlightId) selected = i;
+                Node card = animeCard(anime, true);
+                spotlight.register(card, i, scrolling);
+                covers.getChildren().add(card);
+            }
+            dashboard.add(new VBox(16, label(t("In visione", "Watching"), "dashboard-queue-title"), covers), 0, 1, 2, 1);
+        }
+        int newsRow = watching.isEmpty() ? 1 : 2;
+        dashboard.add(news, 0, newsRow, 2, 1);
+        GridPane.setValignment(news, VPos.TOP);
+        GridPane.setFillHeight(news, false);
+        scrolling.viewportBoundsProperty().addListener((obs, before, after) -> {
+            boolean wide = after.getWidth() >= 1600;
+            if (wide == (before.getWidth() >= 1600)) return;
+            if (wide) dashboard.getColumnConstraints().add(newsColumn);
+            else dashboard.getColumnConstraints().remove(newsColumn);
+            GridPane.setConstraints(news, wide ? 2 : 0, wide ? 0 : newsRow,
+                wide ? 1 : 2, wide ? newsRow : 1);
+            news.setRail(wide);
+        });
+        page.getChildren().add(dashboard);
+
+        shell.setCenter(scrolling);
+        if (!watching.isEmpty()) spotlight.select(selected);
     }
-    private VBox dashboardStat(String caption, String value, String accent) {
-        VBox box = new VBox(8, label(caption, "dashboard-stat-caption"), label(value, "dashboard-stat-value"));
-        box.setPrefWidth(260); box.getStyleClass().add("dashboard-stat");
-        box.setStyle("-fx-border-color: " + accent + ";");
-        return box;
+
+    private final class DashboardSpotlight extends StackPane {
+        private static final PseudoClass SPOTLIGHT = PseudoClass.getPseudoClass("spotlight");
+        private static final double POSTER_WIDTH = 178;
+        private static final double POSTER_HEIGHT = 250;
+        private final List<Anime> watching;
+        private final List<Node> choices = new ArrayList<>();
+        private final PauseTransition hoverDelay = new PauseTransition(Duration.millis(190));
+        private final Label title = label("", "dashboard-spotlight-title");
+        private final Label metadata = label("", "dashboard-spotlight-meta");
+        private final ImageView backdrop = new ImageView();
+        private final ImageView portrait = new ImageView();
+        private final StackPane poster;
+        private final Region posterOutline = new Region();
+        private final Region shade = new Region();
+        private final VBox caption;
+        private FadeTransition backdropFade;
+        private FadeTransition portraitFade;
+        private ParallelTransition captionMotion;
+        private int index = -1;
+        private long artworkVersion;
+
+        DashboardSpotlight(List<Anime> watching) {
+            this.watching = watching;
+            getStyleClass().add("dashboard-spotlight");
+            setMinSize(0, 340);
+            setPrefHeight(354);
+            setMaxWidth(Double.MAX_VALUE);
+            Rectangle clip = new Rectangle();
+            clip.widthProperty().bind(widthProperty());
+            clip.heightProperty().bind(heightProperty());
+            clip.setArcWidth(42);
+            clip.setArcHeight(42);
+            setClip(clip);
+
+            backdrop.setManaged(false);
+            backdrop.setMouseTransparent(true);
+            backdrop.setId("dashboard-spotlight-backdrop");
+            shade.getStyleClass().add("dashboard-spotlight-shade");
+            shade.setManaged(false);
+            shade.setMouseTransparent(true);
+
+            posterOutline.getStyleClass().add("dashboard-spotlight-outline");
+            posterOutline.setManaged(false);
+            posterOutline.setMouseTransparent(true);
+            posterOutline.setRotate(12);
+            Region posterSurface = new Region();
+            posterSurface.getStyleClass().add("dashboard-spotlight-poster-surface");
+            poster = new StackPane(posterSurface, portrait);
+            poster.getStyleClass().add("dashboard-spotlight-poster");
+            poster.setManaged(false);
+            poster.setMouseTransparent(true);
+            poster.setRotate(5);
+            portrait.setFitWidth(POSTER_WIDTH);
+            portrait.setFitHeight(POSTER_HEIGHT);
+            portrait.setId("dashboard-spotlight-cover");
+            Rectangle posterClip = new Rectangle(POSTER_WIDTH, POSTER_HEIGHT);
+            posterClip.setArcWidth(21);
+            posterClip.setArcHeight(21);
+            portrait.setClip(posterClip);
+
+            Button open = button(watching.isEmpty() ? t("Scopri anime", "Explore anime") : t("Apri scheda", "Open details"),
+                "dashboard-spotlight-action", () -> {
+                    if (index < 0) navigate(Route.DISCOVER);
+                    else showDetails(watching.get(index), false);
+                });
+            caption = new VBox(12);
+            caption.getStyleClass().add("dashboard-spotlight-caption");
+            caption.setAlignment(Pos.CENTER_LEFT);
+            caption.setMaxHeight(Region.USE_PREF_SIZE);
+            title.setMaxHeight(158);
+            StackPane.setAlignment(caption, Pos.CENTER_LEFT);
+            if (watching.isEmpty()) {
+                title.setText(t("Nessun anime in visione", "No anime in progress"));
+                caption.getChildren().add(title);
+            } else {
+                Label heading = label(t("Continua a guardare", "Continue watching"), "dashboard-spotlight-kicker");
+                caption.getChildren().addAll(heading, title, metadata);
+            }
+            HBox actions = new HBox(9, open);
+            actions.setAlignment(Pos.CENTER_LEFT);
+            if (watching.size() > 1) {
+                actions.getChildren().addAll(stepButton(-1), stepButton(1));
+            }
+            caption.getChildren().add(actions);
+            getChildren().addAll(backdrop, shade, posterOutline, poster, caption);
+            poster.setVisible(!watching.isEmpty());
+            posterOutline.setVisible(!watching.isEmpty());
+            sceneProperty().addListener((obs, old, scene) -> {
+                if (scene == null) {
+                    hoverDelay.stop();
+                    artworkVersion++;
+                    if (backdropFade != null) backdropFade.stop();
+                    if (portraitFade != null) portraitFade.stop();
+                    if (captionMotion != null) captionMotion.stop();
+                }
+            });
+        }
+
+        private Button stepButton(int direction) {
+            Button step = button(direction < 0 ? "‹" : "›", "dashboard-spotlight-step",
+                () -> select(Math.floorMod(index + direction, watching.size())));
+            step.setId(direction < 0 ? "dashboard-spotlight-previous" : "dashboard-spotlight-next");
+            step.setAccessibleText(direction < 0 ? t("Anime precedente", "Previous anime") : t("Anime successivo", "Next anime"));
+            return step;
+        }
+
+        void register(Node card, int position, ScrollPane scrolling) {
+            choices.add(card);
+            card.hoverProperty().addListener((obs, before, hovered) -> {
+                if (hovered && inViewport(scrolling)) {
+                    hoverDelay.setOnFinished(event -> {
+                        if (card.isHover() && inViewport(scrolling)) select(position);
+                    });
+                    hoverDelay.playFromStart();
+                } else if (!hovered) hoverDelay.stop();
+            });
+            card.focusedProperty().addListener((obs, before, focused) -> {
+                if (focused && inViewport(scrolling)) select(position);
+            });
+        }
+
+        private boolean inViewport(ScrollPane scrolling) {
+            if (getScene() == null || scrolling.getScene() == null) return false;
+            Bounds area = scrolling.localToScene(scrolling.getLayoutBounds());
+            Bounds card = localToScene(getLayoutBounds());
+            return card.getMaxY() > area.getMinY() + 80 && card.getMinY() < area.getMaxY();
+        }
+
+        void select(int position) {
+            hoverDelay.stop();
+            if (index == position) return;
+            if (index >= 0) choices.get(index).pseudoClassStateChanged(SPOTLIGHT, false);
+            index = position;
+            choices.get(index).pseudoClassStateChanged(SPOTLIGHT, true);
+            Anime item = watching.get(index);
+            dashboardSpotlightId = item.id;
+            title.setText(item.title);
+            metadata.setText(meta(item.format) + (item.episodes > 0 ? "  ·  " + item.episodes + " ep" : ""));
+            if (captionMotion != null) captionMotion.stop();
+            caption.setTranslateY(8);
+            caption.setOpacity(.65);
+            TranslateTransition slide = new TranslateTransition(Duration.millis(200), caption);
+            slide.setToY(0);
+            slide.setInterpolator(Interpolator.EASE_OUT);
+            FadeTransition fade = new FadeTransition(Duration.millis(170), caption);
+            fade.setToValue(1);
+            captionMotion = new ParallelTransition(slide, fade);
+            captionMotion.play();
+
+            long version = ++artworkVersion;
+            if (backdropFade != null) backdropFade.stop();
+            if (portraitFade != null) portraitFade.stop();
+            backdrop.setImage(null);
+            portrait.setImage(null);
+            covers.load(item.coverImage, 464, 650, image -> {
+                if (artworkVersion != version) return;
+                portrait.setImage(image);
+                cropToFit(portrait);
+                portraitFade = fadeArtwork(portrait, .45, 1);
+                if (backdrop.getImage() == null) showBackdrop(image, .51);
+            });
+            if (item.bannerImage != null && !item.bannerImage.equals(item.coverImage)) {
+                covers.load(item.bannerImage, 1280, 550, image -> {
+                    if (artworkVersion != version || image.getWidth() < image.getHeight() * 1.4) return;
+                    showBackdrop(image, .94);
+                });
+            }
+        }
+
+        private void showBackdrop(Image image, double opacity) {
+            double from = backdrop.getImage() == null ? 0 : backdrop.getOpacity();
+            if (backdropFade != null) backdropFade.stop();
+            backdrop.setImage(image);
+            cropToFit(backdrop);
+            backdropFade = fadeArtwork(backdrop, from, opacity);
+        }
+
+        private FadeTransition fadeArtwork(Node node, double from, double to) {
+            FadeTransition fade = new FadeTransition(Duration.millis(220), node);
+            fade.setFromValue(from);
+            fade.setToValue(to);
+            fade.play();
+            return fade;
+        }
+
+        @Override protected void layoutChildren() {
+            double w = getWidth();
+            double h = getHeight();
+            caption.setMaxWidth(w * (watching.isEmpty() ? .9 : .63));
+            super.layoutChildren();
+            backdrop.setFitWidth(w);
+            backdrop.setFitHeight(h);
+            backdrop.relocate(0, 0);
+            shade.resizeRelocate(0, 0, w, h);
+            cropToFit(backdrop);
+            double posterX = w - Math.min(126, w * .1) - POSTER_WIDTH;
+            double posterY = (h - POSTER_HEIGHT) / 2;
+            poster.resizeRelocate(posterX, posterY, POSTER_WIDTH, POSTER_HEIGHT);
+            posterOutline.resizeRelocate(posterX + 16, posterY - 4, POSTER_WIDTH, POSTER_HEIGHT);
+        }
+
+        private void cropToFit(ImageView view) {
+            Image image = view.getImage();
+            if (image == null || view.getFitWidth() <= 0 || view.getFitHeight() <= 0) return;
+            double ratio = view.getFitWidth() / view.getFitHeight();
+            double cropWidth = Math.min(image.getWidth(), image.getHeight() * ratio);
+            double cropHeight = Math.min(image.getHeight(), image.getWidth() / ratio);
+            double verticalPosition = view == backdrop && image == portrait.getImage() ? .29 : .5;
+            view.setViewport(new Rectangle2D((image.getWidth() - cropWidth) / 2,
+                (image.getHeight() - cropHeight) * verticalPosition, cropWidth, cropHeight));
+        }
     }
     private VBox stat(String value, String caption) {
         VBox stat = panel(label(value, "stat-value"), label(caption, "muted"));
@@ -463,7 +860,8 @@ public class App extends Application {
         }
     }
     private TilePane cardGrid(List<Anime> anime, boolean animate) {
-        TilePane grid = new TilePane(10, 10); grid.setPrefColumns(5);
+        TilePane grid = posterGrid(10, 10);
+        grid.setPrefColumns(5);
         int index = 0;
         for (Anime item : anime) {
             Node card = animeCard(item); grid.getChildren().add(card);
@@ -471,19 +869,48 @@ public class App extends Application {
         }
         return grid;
     }
+    private TilePane posterGrid(double horizontalGap, double verticalGap) {
+        TilePane grid = new TilePane(horizontalGap, verticalGap);
+        grid.getStyleClass().add("poster-grid");
+        grid.setAlignment(Pos.TOP_CENTER);
+        return grid;
+    }
     private Node animeCard(Anime anime) {
-        StackPane cover = image(covers, anime.coverImage, 200, 280, 20);
+        return animeCard(anime, false);
+    }
+
+    private Node animeCard(Anime anime, boolean dashboardPoster) {
+        int width = dashboardPoster ? 232 : 200;
+        StackPane cover = image(covers, anime.coverImage, width, dashboardPoster ? 325 : 280, dashboardPoster ? 26 : 20);
         Label state = label("", "status");
         StackPane.setAlignment(state, Pos.TOP_LEFT); StackPane.setMargin(state, new Insets(12));
         Button heart = button("", "heart", () -> {});
         heart.setId("favourite-" + anime.id);
         StackPane.setAlignment(heart, Pos.TOP_RIGHT); StackPane.setMargin(heart, new Insets(10));
-        cover.getChildren().addAll(state, heart);
-        Label name = label(anime.title, "card-title"); name.setMinHeight(42); name.setMaxHeight(42);
+        if (!dashboardPoster) cover.getChildren().add(state);
+        cover.getChildren().add(heart);
+        Label name = label(anime.title, "card-title");
+        if (dashboardPoster) {
+            name.setMinHeight(0);
+            name.setMaxHeight(46);
+        } else {
+            name.setMinHeight(42);
+            name.setMaxHeight(42);
+        }
         Label info = label(meta(anime.format) + "  ·  " + (anime.episodes > 0 ? anime.episodes + " ep" : t("Episodi N/D", "Episodes N/A")), "tiny");
-        VBox footer = new VBox(6, name, info); footer.getStyleClass().add("card-footer");
-        VBox card = new VBox(cover, footer); card.setPrefWidth(200); card.setMaxWidth(200);
+        VBox footer = new VBox(dashboardPoster ? 4 : 6, name, info); footer.getStyleClass().add("card-footer");
+        VBox card = new VBox(cover, footer); card.setPrefWidth(width); card.setMaxWidth(width);
         card.getStyleClass().add("anime-card"); card.setId("anime-" + anime.id);
+        if (dashboardPoster) {
+            card.getStyleClass().add("dashboard-poster");
+            TranslateTransition lift = new TranslateTransition(Duration.millis(155), cover);
+            lift.setInterpolator(Interpolator.EASE_OUT);
+            card.hoverProperty().addListener((obs, before, hovering) -> {
+                lift.stop();
+                lift.setToY(hovering ? -3 : 0);
+                lift.playFromStart();
+            });
+        }
         card.setFocusTraversable(true); card.setAccessibleRole(AccessibleRole.BUTTON); card.setAccessibleText(anime.title);
         Runnable update = () -> {
             Anime saved = library.findById(anime.id);
@@ -508,92 +935,152 @@ public class App extends Application {
         heart.addEventHandler(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
         card.setOnMouseClicked(e -> { if (e.getButton() == MouseButton.PRIMARY) { hideCardPopup(); showDetails(anime, false); } });
         card.setOnKeyPressed(e -> { if (e.getCode() == KeyCode.ENTER) { showDetails(anime, false); e.consume(); } });
+        card.setOnContextMenuRequested(event -> {
+            showCardContext(card, anime, event.getScreenX(), event.getScreenY());
+            event.consume();
+        });
+        card.hoverProperty().addListener((obs, before, hovering) -> {
+            if (hovering && modals.isEmpty()) {
+                if (cardHover == null) cardHover = new CardHoverMenu();
+                cardHover.enter(card, anime);
+            } else if (cardHover != null) cardHover.leave(card);
+        });
+        card.setOnMouseMoved(event -> {
+            if (cardHover != null && cardHover.anchor == null && modals.isEmpty()) cardHover.enter(card, anime);
+        });
+        card.sceneProperty().addListener((obs, before, scene) -> {
+            if (scene == null && cardHover != null && cardHover.anchor == card) cardHover.hide();
+        });
+        return card;
+    }
+
+    private void showCardContext(Node card, Anime anime, double x, double y) {
+        hideCardPopup();
         ContextMenu menu = new ContextMenu();
         ToggleGroup statuses = new ToggleGroup();
+        Anime saved = library.findById(anime.id);
         for (Anime.Status value : Anime.Status.values()) {
             RadioMenuItem item = new RadioMenuItem(status(value));
             item.getStyleClass().add("status-item-" + value.name().toLowerCase(Locale.ROOT));
             item.setToggleGroup(statuses);
-            item.setOnAction(e -> changeStatus(anime, value)); menu.getItems().add(item);
+            item.setSelected(saved != null && saved.status == value);
+            item.setOnAction(event -> changeStatus(anime, value));
+            menu.getItems().add(item);
         }
-        menu.setOnShowing(e -> {
-            Anime saved = library.findById(anime.id);
-            for (int i = 0; i < Anime.Status.values().length; i++)
-                ((RadioMenuItem) menu.getItems().get(i)).setSelected(saved != null && saved.status == Anime.Status.values()[i]);
-        });
-        menu.getItems().add(new SeparatorMenuItem());
-        MenuItem folder = new MenuItem(t("Organizza in cartelle", "Organise in folders")); folder.setOnAction(e -> folderMembership(anime));
-        menu.getItems().add(folder);
-        card.setOnContextMenuRequested(e -> { menu.show(card, e.getScreenX(), e.getScreenY()); e.consume(); });
-
-        Popup hoverMenu = new Popup(); hoverMenu.setAutoHide(false); hoverMenu.setHideOnEscape(true);
-        VBox hoverContent = new VBox(7); hoverContent.getStyleClass().add("card-hover-menu"); hoverContent.setPrefWidth(204);
-        Label hoverTitle = label(anime.title, "card-hover-title");
-        Label hoverMeta = label(meta(anime.format) + "  ·  " + (anime.episodes > 0 ? anime.episodes + " ep" : "—")
-            + "\n" + meta(anime.year) + (anime.genres == null || anime.genres.isEmpty() ? "" : "  ·  " + genre(anime.genres.get(0))), "tiny");
-        VBox statusButtons = new VBox(4, label(t("STATO DI VISIONE", "WATCH STATUS"), "eyebrow"));
-        for (Anime.Status value : Anime.Status.values()) {
-            Button quick = button(status(value), "quick-status", () -> {
-                hoverMenu.hide(); if (activeCardPopup == hoverMenu) activeCardPopup = null; changeStatus(anime, value);
-            });
-            quick.getStyleClass().add("quick-status-" + value.name().toLowerCase(Locale.ROOT));
-            quick.setMaxWidth(Double.MAX_VALUE); statusButtons.getChildren().add(quick);
-        }
-        hoverContent.getChildren().addAll(hoverTitle, hoverMeta, new Separator(), statusButtons);
-        hoverMenu.getContent().add(hoverContent);
-        PauseTransition showDelay = new PauseTransition(Duration.millis(180));
-        PauseTransition hideDelay = new PauseTransition(Duration.millis(130));
-        ParallelTransition[] hideMotion = new ParallelTransition[1];
-        Runnable hideAnimated = () -> {
-            if (!hoverMenu.isShowing()) return;
-            FadeTransition fade = new FadeTransition(Duration.millis(90), hoverContent); fade.setToValue(0);
-            ScaleTransition shrink = new ScaleTransition(Duration.millis(90), hoverContent); shrink.setToX(.97); shrink.setToY(.97);
-            hideMotion[0] = new ParallelTransition(fade, shrink);
-            hideMotion[0].setOnFinished(event -> {
-                hoverMenu.hide(); hoverContent.setOpacity(1); hoverContent.setScaleX(1); hoverContent.setScaleY(1);
-                if (activeCardPopup == hoverMenu) activeCardPopup = null;
-            });
-            hideMotion[0].playFromStart();
-        };
-        Runnable scheduleHide = () -> { hideDelay.stop(); hideDelay.setOnFinished(e -> {
-            if (!card.isHover() && !hoverContent.isHover()) hideAnimated.run();
-        }); hideDelay.playFromStart(); };
-        showDelay.setOnFinished(e -> {
-            if (!card.isHover() || card.getScene() == null) return;
-            hideCardPopup();
-            Point2D right = card.localToScreen(card.getWidth() + 12, 4), left = card.localToScreen(-216, 4);
-            if (right == null || left == null) return;
-            double x = right.getX(), edge = card.getScene().getWindow().getX() + card.getScene().getWindow().getWidth();
-            boolean opensLeft = x + 212 > edge; if (opensLeft) x = left.getX();
-            hoverContent.setOpacity(0); hoverContent.setScaleX(.96); hoverContent.setScaleY(.96);
-            hoverContent.setTranslateX(opensLeft ? 12 : -12);
-            hoverMenu.show(card, x, right.getY()); activeCardPopup = hoverMenu;
-            FadeTransition fade = new FadeTransition(Duration.millis(140), hoverContent); fade.setToValue(1);
-            ScaleTransition grow = new ScaleTransition(Duration.millis(140), hoverContent); grow.setToX(1); grow.setToY(1);
-            TranslateTransition slide = new TranslateTransition(Duration.millis(140), hoverContent); slide.setToX(0); slide.setInterpolator(Interpolator.EASE_OUT);
-            new ParallelTransition(fade, grow, slide).play();
-        });
-        card.setOnMouseEntered(e -> {
-            hideDelay.stop(); if (hideMotion[0] != null) hideMotion[0].stop();
-            hoverContent.setOpacity(1); hoverContent.setScaleX(1); hoverContent.setScaleY(1);
-            if (!hoverMenu.isShowing()) showDelay.playFromStart();
-            ScaleTransition grow = new ScaleTransition(Duration.millis(140), card); grow.setToX(1.018); grow.setToY(1.018); grow.play();
-        });
-        card.setOnMouseExited(e -> {
-            showDelay.stop(); scheduleHide.run();
-            ScaleTransition shrink = new ScaleTransition(Duration.millis(140), card); shrink.setToX(1); shrink.setToY(1); shrink.play();
-        });
-        hoverContent.setOnMouseEntered(e -> {
-            hideDelay.stop(); if (hideMotion[0] != null) hideMotion[0].stop();
-            hoverContent.setOpacity(1); hoverContent.setScaleX(1); hoverContent.setScaleY(1);
-        });
-        hoverContent.setOnMouseExited(e -> scheduleHide.run());
-        hoverContent.addEventFilter(ScrollEvent.SCROLL, e -> { hoverMenu.hide(); if (activeCardPopup == hoverMenu) activeCardPopup = null; e.consume(); });
-        card.addEventFilter(ScrollEvent.SCROLL, e -> { menu.hide(); hoverMenu.hide(); if (activeCardPopup == hoverMenu) activeCardPopup = null; });
-        card.sceneProperty().addListener((obs, old, scene) -> { if (scene == null) { menu.hide(); hoverMenu.hide(); if (activeCardPopup == hoverMenu) activeCardPopup = null; } });
-        return card;
+        MenuItem folder = new MenuItem(t("Organizza in cartelle", "Organise in folders"));
+        folder.setOnAction(event -> folderMembership(anime));
+        menu.getItems().addAll(new SeparatorMenuItem(), folder);
+        menu.setOnHidden(event -> { if (cardContextMenu == menu) cardContextMenu = null; });
+        cardContextMenu = menu;
+        menu.show(card, x, y);
     }
-    private void hideCardPopup() { if (activeCardPopup != null) { activeCardPopup.hide(); activeCardPopup = null; } }
+
+    private void hideCardPopup() {
+        if (cardHover != null) cardHover.hide();
+        if (cardContextMenu != null) cardContextMenu.hide();
+    }
+
+    /** Reuses one overlay in the app scene instead of opening a native window for each cover. */
+    private final class CardHoverMenu {
+        private static final double WIDTH = 204;
+        private final VBox content = new VBox(7);
+        private final Label title = label("", "card-hover-title");
+        private final Label description = label("", "tiny");
+        private final Label statusHeading = label("", "eyebrow");
+        private final Map<Anime.Status, Button> statusButtons = new EnumMap<>(Anime.Status.class);
+        private final PauseTransition openDelay = new PauseTransition(Duration.millis(95));
+        private final PauseTransition closeDelay = new PauseTransition(Duration.millis(165));
+        private final FadeTransition reveal = new FadeTransition(Duration.millis(110), content);
+        private VBox anchor;
+        private Anime anime;
+
+        CardHoverMenu() {
+            content.getStyleClass().add("card-hover-menu");
+            content.setManaged(false);
+            content.setVisible(false);
+            VBox actions = new VBox(4, statusHeading);
+            for (Anime.Status value : Anime.Status.values()) {
+                Button quick = button("", "quick-status", () -> {
+                    Anime selected = anime;
+                    hide();
+                    if (selected != null) changeStatus(selected, value);
+                });
+                quick.getStyleClass().add("quick-status-" + value.name().toLowerCase(Locale.ROOT));
+                quick.setMaxWidth(Double.MAX_VALUE);
+                statusButtons.put(value, quick);
+                actions.getChildren().add(quick);
+            }
+            content.getChildren().addAll(title, description, new Separator(), actions);
+            openDelay.setOnFinished(event -> show());
+            closeDelay.setOnFinished(event -> {
+                if (anchor != null && !anchor.isHover() && !content.isHover()) hide();
+            });
+            reveal.setFromValue(.55);
+            reveal.setToValue(1);
+            content.hoverProperty().addListener((obs, before, hovering) -> {
+                if (hovering) closeDelay.stop();
+                else if (anchor != null && !anchor.isHover()) closeDelay.playFromStart();
+            });
+        }
+
+        void enter(VBox card, Anime item) {
+            if (cardContextMenu != null || card.getScene() == null) return;
+            closeDelay.stop();
+            if (anchor == card && content.isVisible()) return;
+            hide();
+            anchor = card;
+            anime = item;
+            openDelay.playFromStart();
+        }
+
+        void leave(VBox card) {
+            if (anchor != card) return;
+            if (!content.isVisible()) hide();
+            else closeDelay.playFromStart();
+        }
+
+        private void show() {
+            if (anchor == null || !anchor.isHover() || anchor.getScene() == null || !modals.isEmpty()) {
+                hide();
+                return;
+            }
+            if (lastCardScroll != 0 && System.nanoTime() - lastCardScroll < 150_000_000L) {
+                openDelay.playFromStart();
+                return;
+            }
+            title.setText(anime.title);
+            description.setText(meta(anime.format) + "  ·  " + (anime.episodes > 0 ? anime.episodes + " ep" : "—")
+                + "\n" + meta(anime.year) + (anime.genres == null || anime.genres.isEmpty() ? "" : "  ·  " + genre(anime.genres.get(0))));
+            statusHeading.setText(t("STATO DI VISIONE", "WATCH STATUS"));
+            Anime saved = library.findById(anime.id);
+            statusButtons.forEach((value, quick) -> {
+                quick.setText(status(value));
+                quick.getStyleClass().remove("quick-status-current");
+                if (saved != null && saved.status == value) quick.getStyleClass().add("quick-status-current");
+            });
+            if (content.getParent() == null) root.getChildren().add(content);
+            content.setOpacity(.55);
+            content.setVisible(true);
+            content.applyCss();
+            double height = content.prefHeight(WIDTH);
+            Bounds card = root.sceneToLocal(anchor.localToScene(anchor.getLayoutBounds()));
+            double x = card.getMaxX() + 10;
+            if (x + WIDTH > root.getWidth() - 8) x = card.getMinX() - WIDTH - 10;
+            x = Math.max(8, Math.min(x, root.getWidth() - WIDTH - 8));
+            double y = Math.max(8, Math.min(card.getMinY() + 4, root.getHeight() - height - 8));
+            content.resizeRelocate(x, y, WIDTH, height);
+            reveal.playFromStart();
+        }
+
+        void hide() {
+            openDelay.stop();
+            closeDelay.stop();
+            reveal.stop();
+            anchor = null;
+            anime = null;
+            content.setVisible(false);
+        }
+    }
     private ListCell<Anime.Status> statusCell() {
         return new ListCell<>() {
             @Override protected void updateItem(Anime.Status value, boolean empty) {
@@ -1043,55 +1530,165 @@ public class App extends Application {
 
     private void rankingPage() {
         List<Anime> ranking = library.ranking();
-        VBox page = page(routeName(Route.RANKING), null);
-        if (ranking.isEmpty()) page.getChildren().add(empty(t("Nessun voto", "No ratings yet"),
-            t("Segna un anime come visto e scegli se votarlo. Puoi farlo anche dalla sua scheda.", "Mark an anime completed and choose whether to rate it. You can also rate it from its details."),
-            t("Apri la mia lista", "Open my library"), () -> navigate(Route.LIBRARY)));
-        else {
-            Anime winner = ranking.get(0);
-            VBox winnerInfo = new VBox(10, label("01", "ranking-position"), label(winner.title, "detail-title"),
-                label(meta(winner.format) + "  ·  " + meta(winner.year), "muted"), spacer(),
-                label(number(winner.overall()), "ranking-feature-score"), label(t("VOTO FINALE", "OVERALL"), "eyebrow"));
-            HBox first = new HBox(22, image(covers, winner.coverImage, 174, 244, 15), winnerInfo);
-            first.getStyleClass().add("ranking-feature"); first.setAlignment(Pos.CENTER_LEFT);
-            first.setMinWidth(0); first.setMaxWidth(Double.MAX_VALUE); HBox.setHgrow(first, Priority.ALWAYS);
-            first.setOnMouseClicked(e -> showDetails(winner, false));
-            VBox others = new VBox(14); others.setMinWidth(0); others.setMaxWidth(Double.MAX_VALUE);
-            HBox.setHgrow(others, Priority.ALWAYS);
-            for (int position = 2; position <= Math.min(3, ranking.size()); position++) {
-                Anime anime = ranking.get(position - 1);
-                HBox entry = row(label(String.format("%02d", position), "ranking-position"),
-                    image(covers, anime.coverImage, 78, 109, 10),
-                    new VBox(7, label(anime.title, "card-title"), label(meta(anime.format) + "  ·  " + meta(anime.year), "tiny")),
-                    spacer(), label(number(anime.overall()), "ranking-side-score"));
-                entry.getStyleClass().add("ranking-runner"); entry.setOnMouseClicked(e -> showDetails(anime, false));
-                others.getChildren().add(entry);
-            }
-            HBox top = new HBox(18, first, others); top.setAlignment(Pos.TOP_LEFT);
-            page.getChildren().add(top);
+        VBox page = page(null, null);
+        page.setAlignment(Pos.TOP_CENTER);
+        VBox content = new VBox(18, label(routeName(Route.RANKING), "title"));
+        content.setMaxWidth(1080);
+        if (ranking.isEmpty()) {
+            content.getChildren().add(empty(t("Nessun voto", "No ratings yet"),
+                t("Puoi votare dalla scheda di un anime visto.", "You can rate a completed anime from its details."),
+                t("Apri la mia lista", "Open my library"), () -> navigate(Route.LIBRARY)));
+        } else {
+            HBox podium = new HBox(18);
+            podium.setAlignment(Pos.BOTTOM_CENTER);
+            podium.getStyleClass().add("ranking-podium");
+            List<Integer> positions = switch (ranking.size()) {
+                case 1 -> List.of(1);
+                case 2 -> List.of(1, 2);
+                default -> List.of(2, 1, 3);
+            };
+            for (int position : positions)
+                podium.getChildren().add(rankingPodiumCard(ranking.get(position - 1), position));
+            content.getChildren().add(podium);
+            VBox entries = new VBox(8);
             for (int index = 3; index < ranking.size(); index++) {
-                Anime anime = ranking.get(index);
-                HBox entry = row(label(String.format("%02d", index + 1), "rank-number"), image(covers, anime.coverImage, 48, 67, 8),
-                    new VBox(4, label(anime.title, "body"), label(meta(anime.format) + "  ·  " + anime.viewCount() + t(" visioni", " viewings"), "tiny")),
-                    spacer(), label(number(anime.overall()), "rank-number"), button(t("Dettagli", "Details") + " →", "quiet", () -> showDetails(anime, false)));
-                entry.getStyleClass().addAll("list-row", "ranking-entry"); page.getChildren().add(entry);
+                entries.getChildren().add(rankingListEntry(ranking.get(index), index + 1));
             }
+            if (!entries.getChildren().isEmpty()) content.getChildren().add(entries);
         }
+        page.getChildren().add(content);
         shell.setCenter(scroll(page));
+    }
+
+    private Button rankingPodiumCard(Anime anime, int position) {
+        boolean winner = position == 1;
+        int width = winner ? 252 : 207;
+        int height = winner ? 354 : 290;
+        StackPane cover = image(covers, anime.coverImage, width, height, 34);
+        Region shade = new Region();
+        shade.getStyleClass().add("ranking-podium-shade");
+        Label rank = label("#" + position, "ranking-position");
+        rank.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+        HBox score = rankingScore(anime);
+        StackPane.setAlignment(rank, Pos.TOP_LEFT);
+        StackPane.setAlignment(score, Pos.TOP_RIGHT);
+        StackPane.setMargin(rank, new Insets(12));
+        StackPane.setMargin(score, new Insets(12));
+
+        Label title = label(anime.title, "ranking-podium-title");
+        title.setPrefWidth(width - 30);
+        title.setMaxWidth(width - 30);
+        title.setMaxHeight(winner ? 62 : 50);
+        VBox caption = new VBox(5, title, label(meta(anime.format) + "  ·  " + meta(anime.year), "ranking-podium-meta"));
+        caption.getStyleClass().add("ranking-podium-caption");
+        caption.setMaxHeight(Region.USE_PREF_SIZE);
+        StackPane.setAlignment(caption, Pos.BOTTOM_CENTER);
+        StackPane poster = new StackPane(cover, shade, rank, score, caption);
+        poster.setMinSize(width, height);
+        poster.setPrefSize(width, height);
+        poster.setMaxSize(width, height);
+        Rectangle clip = new Rectangle(width, height);
+        clip.setArcWidth(34);
+        clip.setArcHeight(34);
+        poster.setClip(clip);
+
+        Button card = rankingButton(anime, position, "ranking-podium-card", poster);
+        card.getStyleClass().add(switch (position) {
+            case 1 -> "ranking-gold";
+            case 2 -> "ranking-silver";
+            default -> "ranking-bronze";
+        });
+        return card;
+    }
+
+    private Button rankingListEntry(Anime anime, int position) {
+        Label rank = label("#" + position, "ranking-list-position");
+        Label name = label(anime.title, "ranking-list-title");
+        name.setWrapText(false);
+        name.setMinWidth(0);
+        Label details = label(meta(anime.format) + "  ·  " + anime.viewCount() + t(" visioni", " viewings"), "tiny");
+        details.setWrapText(false);
+        VBox title = new VBox(3, name, details);
+        title.setMinWidth(0);
+        title.setMaxWidth(Double.MAX_VALUE);
+        title.setMaxHeight(Region.USE_PREF_SIZE);
+        HBox.setHgrow(title, Priority.ALWAYS);
+        SVGPath chevron = new SVGPath();
+        chevron.setContent("M 1,1 L 5,5 L 1,9");
+        chevron.getStyleClass().add("ranking-chevron");
+        HBox entry = new HBox(14, rank, image(covers, anime.coverImage, 42, 59, 12),
+            title, rankingScore(anime), chevron);
+        entry.setAlignment(Pos.CENTER_LEFT);
+        Button button = rankingButton(anime, position, "ranking-entry", entry);
+        entry.prefWidthProperty().bind(button.widthProperty().subtract(32));
+        entry.setMinWidth(0);
+        button.setMinHeight(82);
+        button.setPrefHeight(82);
+        button.setMaxHeight(82);
+        button.setMaxWidth(Double.MAX_VALUE);
+        return button;
+    }
+
+    private Button rankingButton(Anime anime, int position, String style, Node content) {
+        Button button = button("", style, () -> showDetails(anime, false));
+        button.setGraphic(content);
+        button.setAccessibleText("#" + position + " · " + anime.title + " · "
+            + t("Voto ", "Rating ") + number(anime.overall()));
+        return button;
+    }
+
+    private HBox rankingScore(Anime anime) {
+        SVGPath star = new SVGPath();
+        star.setContent("M 6,0 L 7.8,3.8 L 12,4.4 L 9,7.5 L 9.7,11.8 L 6,9.8 L 2.3,11.8 L 3,7.5 L 0,4.4 L 4.2,3.8 Z");
+        star.getStyleClass().add("ranking-score-star");
+        HBox score = new HBox(6, star, label(number(anime.overall()), "ranking-score-value"));
+        score.getStyleClass().add("ranking-score");
+        score.setAlignment(Pos.CENTER);
+        score.setMinWidth(Region.USE_PREF_SIZE);
+        score.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+        return score;
     }
 
     private void discoverPage() {
         VBox page = page(null, null);
-        TextField search = new TextField(); search.setId("online-search");
-        search.setPromptText(t("Cerca un anime, una storia, un mondo…", "Search for an anime, a story, a world…"));
-        HBox.setHgrow(search, Priority.ALWAYS);
-        VBox suggestions = new VBox(3); suggestions.setVisible(false); suggestions.setManaged(false); suggestions.getStyleClass().add("suggestions");
-        Popup suggestionPopup = new Popup(); suggestionPopup.setAutoHide(true); suggestionPopup.setHideOnEscape(true);
-        suggestionPopup.getContent().add(suggestions); suggestions.getProperties().put("popup", suggestionPopup);
+        page.setAlignment(Pos.TOP_CENTER);
+        TextField search = new TextField();
+        search.setId("online-search");
+        search.setPromptText(t("Cerca un anime…", "Search anime…"));
+        search.setAccessibleText(t("Cerca anime", "Search anime"));
+        SVGPath searchIcon = discoverIcon("M 12.5,7.5 A 5,5 0 1,1 2.5,7.5 A 5,5 0 0,1 12.5,7.5 Z M 11.1,11.1 L 15.5,15.5");
+        StackPane input = new StackPane(search, searchIcon);
+        input.getStyleClass().add("discover-search-input");
+        StackPane.setAlignment(searchIcon, Pos.CENTER_LEFT);
+        StackPane.setMargin(searchIcon, new Insets(0, 0, 0, 16));
+        HBox.setHgrow(input, Priority.ALWAYS);
         VBox content = new VBox(26);
-        FlowPane filters = new FlowPane(10, 12); filters.getStyleClass().add("discover-filters");
+        DiscoverSuggestions suggestions = new DiscoverSuggestions(search, content);
+        Button submit = button(t("Cerca", "Search"), "discover-search-submit", () -> onlineSearch(search.getText(), content, suggestions));
+        Region searchDivider = new Region();
+        searchDivider.getStyleClass().add("discover-search-divider");
+        HBox searchCapsule = row(input, searchDivider, submit);
+        searchCapsule.getStyleClass().add("discover-search-capsule");
+        HBox.setHgrow(searchCapsule, Priority.ALWAYS);
+        PseudoClass typing = PseudoClass.getPseudoClass("typing");
+        search.focusedProperty().addListener((obs, before, focused) -> searchCapsule.pseudoClassStateChanged(typing, focused));
+        ToggleButton filterToggle = new ToggleButton();
+        filterToggle.setId("discover-filters-toggle");
+        filterToggle.getStyleClass().add("discover-filters-toggle");
+        filterToggle.setGraphic(discoverIcon("M 1,4 H 7 M 10,4 H 16 M 7,1.5 V 6.5 M 1,12 H 11 M 14,12 H 16 M 11,9.5 V 14.5"));
+        HBox command = row(searchCapsule, filterToggle);
+        command.getStyleClass().add("discover-command");
+        GridPane fields = new GridPane();
+        fields.setHgap(14);
+        fields.setVgap(13);
+        for (int index = 0; index < 3; index++) {
+            ColumnConstraints column = new ColumnConstraints();
+            column.setPercentWidth(100.0 / 3);
+            fields.getColumnConstraints().add(column);
+        }
         List<String> genreOptions = new ArrayList<>(); genreOptions.add(""); genreOptions.addAll(Preferences.GENRES);
         ComboBox<String> genreBox = combo(genreOptions, discoverFilters.genre(), value -> value.isBlank() ? t("Tutti", "Any") : genre(value));
+        genreBox.setId("discover-genre");
         List<Integer> years = new ArrayList<>(); years.add(0);
         for (int year = Year.now().getValue() + 1; year >= 1960; year--) years.add(year);
         ComboBox<Integer> yearBox = combo(years, discoverFilters.year(), value -> value == 0 ? t("Tutti", "Any") : Integer.toString(value));
@@ -1110,80 +1707,291 @@ public class App extends Application {
             case SPRING -> t("Primavera", "Spring"); case SUMMER -> t("Estate", "Summer");
             case FALL -> t("Autunno", "Fall");
         });
-        filters.getChildren().addAll(discoverFilter(t("Genere", "Genre"), genreBox), discoverFilter(t("Anno", "Year"), yearBox),
-            discoverFilter(t("Ordina", "Sort"), sortBox), discoverFilter(t("Stato", "Status"), statusBox),
-            discoverFilter(t("Tipo", "Format"), formatBox), discoverFilter(t("Stagione", "Season"), seasonBox));
+        fields.addRow(0, discoverFilter(t("Genere", "Genre"), genreBox), discoverFilter(t("Tipo", "Format"), formatBox),
+            discoverFilter(t("Stato", "Status"), statusBox));
+        fields.addRow(1, discoverFilter(t("Anno", "Year"), yearBox), discoverFilter(t("Stagione", "Season"), seasonBox),
+            discoverFilter(t("Ordina", "Sort"), sortBox));
+        for (ComboBox<?> box : List.of(genreBox, yearBox, sortBox, statusBox, formatBox, seasonBox)) box.setVisibleRowCount(10);
+        Button reset = button(t("Azzera filtri", "Reset filters"), "discover-filters-reset", () -> {});
+        reset.setId("discover-filters-reset");
+        HBox filterActions = new HBox(reset);
+        filterActions.setAlignment(Pos.CENTER_RIGHT);
+        VBox filters = new VBox(12, fields, filterActions);
+        filters.setId("discover-filter-panel");
+        filters.getStyleClass().add("discover-filters");
+        filters.visibleProperty().bind(filterToggle.selectedProperty());
+        filters.managedProperty().bind(filters.visibleProperty());
+        filterToggle.setOnAction(e -> {
+            suggestions.hide();
+            if (filterToggle.isSelected()) entrance(filters, 0);
+        });
+        VBox toolbar = new VBox(10, command, filters);
+        toolbar.setMaxWidth(1080);
+        page.getChildren().addAll(toolbar, content);
+        ScrollPane scrolling = scroll(page);
+        shell.setCenter(scrolling);
+
+        PauseTransition delay = new PauseTransition(Duration.millis(110));
+        searchDelay = delay;
         List<Anime> previous = new ArrayList<>();
+        Runnable updateFilterCount = () -> {
+            int count = 0;
+            if (!discoverFilters.genre().isBlank()) count++;
+            if (discoverFilters.year() != 0) count++;
+            if (discoverFilters.sort() != DiscoverQuery.Sort.POPULARITY) count++;
+            if (discoverFilters.status() != DiscoverQuery.Status.ANY) count++;
+            if (discoverFilters.format() != DiscoverQuery.Format.ANY) count++;
+            if (discoverFilters.season() != DiscoverQuery.Season.ANY) count++;
+            String caption = t("Filtri", "Filters");
+            filterToggle.setText(count > 0 ? caption + " · " + count : caption);
+            reset.setDisable(count == 0);
+        };
+        boolean[] resetting = {false};
         Runnable applyFilters = () -> {
+            if (resetting[0]) return;
             discoverFilters = new DiscoverQuery("", genreBox.getValue(), yearBox.getValue(), sortBox.getValue(),
                 statusBox.getValue(), formatBox.getValue(), seasonBox.getValue());
-            previous.clear(); hideSuggestions(suggestions);
+            previous.clear();
+            searchGeneration++;
+            delay.stop();
+            suggestions.hide();
+            updateFilterCount.run();
             if (!search.getText().isBlank() || discoverFilters.hasFilters()) onlineSearch(search.getText(), content, suggestions);
-            else discoverHome(content, (ScrollPane) shell.getCenter());
+            else discoverHome(content, scrolling);
         };
-        for (ComboBox<?> box : List.of(genreBox, yearBox, sortBox, statusBox, formatBox, seasonBox)) box.setOnAction(e -> applyFilters.run());
-        page.getChildren().addAll(row(search, button(t("Cerca", "Search"), "primary", () -> onlineSearch(search.getText(), content, suggestions))), filters, content);
-        ScrollPane scrolling = scroll(page); shell.setCenter(scrolling);
-        searchDelay = new PauseTransition(Duration.millis(65));
-        search.textProperty().addListener((obs, old, query) -> {
-            int generation = ++searchGeneration; searchDelay.stop();
-            suggestions.getChildren().clear(); hideSuggestions(suggestions);
-            if (query.isBlank()) return;
-            List<Anime> instant = previous.stream().filter(a -> a.title != null && a.title.toLowerCase(Locale.ROOT).contains(query.strip().toLowerCase(Locale.ROOT))).limit(5).toList();
-            if (!instant.isEmpty()) showSuggestions(instant, query.strip(), search, suggestions, content);
-            searchDelay.setOnFinished(e -> async(() -> api.search(discoverFilters.withText(query), 1, 5), search, results -> {
-                if (generation != searchGeneration || !search.isFocused()) return;
-                previous.clear(); previous.addAll(results);
-                showSuggestions(results, query.strip(), search, suggestions, content);
-            }, error -> {}));
-            searchDelay.playFromStart();
+        for (ComboBox<?> box : List.of(genreBox, yearBox, sortBox, statusBox, formatBox, seasonBox))
+            box.valueProperty().addListener((obs, old, value) -> applyFilters.run());
+        reset.setOnAction(e -> {
+            resetting[0] = true;
+            genreBox.setValue("");
+            yearBox.setValue(0);
+            sortBox.setValue(DiscoverQuery.Sort.POPULARITY);
+            statusBox.setValue(DiscoverQuery.Status.ANY);
+            formatBox.setValue(DiscoverQuery.Format.ANY);
+            seasonBox.setValue(DiscoverQuery.Season.ANY);
+            resetting[0] = false;
+            applyFilters.run();
         });
-        search.setOnAction(e -> onlineSearch(search.getText(), content, suggestions));
-        scrolling.addEventFilter(ScrollEvent.SCROLL, e -> hideSuggestions(suggestions));
-        discoverHome(content, scrolling);
+        search.textProperty().addListener((obs, old, query) -> {
+            int generation = ++searchGeneration;
+            delay.stop();
+            if (query.isBlank()) {
+                suggestions.hide();
+                return;
+            }
+            DiscoverQuery filter = discoverFilters.withText(query);
+            List<Anime> available = new ArrayList<>(previous);
+            if (!discoverFilters.hasFilters()) available.addAll(library.all());
+            String term = query.strip().toLowerCase(Locale.ROOT);
+            Set<Integer> shown = new HashSet<>();
+            List<Anime> instant = available.stream()
+                .filter(anime -> anime.title != null && anime.title.toLowerCase(Locale.ROOT).contains(term) && shown.add(anime.id))
+                .limit(5).toList();
+            if (!instant.isEmpty()) suggestions.show(instant);
+            else if (suggestions.isShowing()) suggestions.showMessage(t("Ricerca in corso…", "Searching…"));
+            delay.setOnFinished(e -> async(() -> api.search(filter, 1, 5), search, results -> {
+                if (generation != searchGeneration || !search.isFocused()) return;
+                if (!results.isEmpty()) {
+                    previous.clear(); previous.addAll(results);
+                    suggestions.show(results);
+                } else if (instant.isEmpty()) {
+                    suggestions.showMessage(t("Nessun suggerimento", "No suggestions"));
+                }
+            }, error -> {
+                if (generation == searchGeneration && search.isFocused() && instant.isEmpty()) {
+                    suggestions.showMessage(t("Suggerimenti online non disponibili", "Online suggestions unavailable"));
+                }
+            }));
+            delay.playFromStart();
+        });
+        search.addEventFilter(KeyEvent.KEY_PRESSED, e -> {
+            if ((e.getCode() == KeyCode.DOWN && suggestions.move(1)) || (e.getCode() == KeyCode.UP && suggestions.move(-1))) {
+                e.consume();
+            } else if (e.getCode() == KeyCode.ESCAPE && suggestions.isShowing()) {
+                searchGeneration++;
+                delay.stop();
+                suggestions.hide();
+                e.consume();
+            } else if (e.getCode() == KeyCode.TAB) {
+                searchGeneration++;
+                delay.stop();
+                suggestions.hide();
+            }
+        });
+        search.setOnAction(e -> {
+            if (!suggestions.openSelected()) onlineSearch(search.getText(), content, suggestions);
+        });
+        scrolling.vvalueProperty().addListener((obs, old, value) -> {
+            searchGeneration++;
+            delay.stop();
+            suggestions.hide();
+        });
+        updateFilterCount.run();
+        if (discoverFilters.hasFilters()) onlineSearch("", content, suggestions);
+        else discoverHome(content, scrolling);
     }
+
+    private SVGPath discoverIcon(String path) {
+        SVGPath icon = new SVGPath();
+        icon.setContent(path);
+        icon.getStyleClass().add("discover-command-icon");
+        icon.setMouseTransparent(true);
+        return icon;
+    }
+
     private VBox discoverFilter(String title, ComboBox<?> box) {
-        box.setPrefWidth(142); box.setMaxWidth(142); box.getStyleClass().add("discover-filter-box");
-        VBox field = new VBox(7, label(title, "discover-filter-label"), box);
-        field.getStyleClass().add("discover-filter-field"); return field;
+        box.setMinWidth(0);
+        box.setMaxWidth(Double.MAX_VALUE);
+        box.getStyleClass().add("discover-filter-box");
+        Label heading = label(title, "discover-filter-label");
+        heading.setLabelFor(box);
+        return new VBox(6, heading, box);
     }
-    private void showSuggestions(List<Anime> results, String query, TextField search, VBox suggestions, VBox content) {
-        suggestions.getChildren().clear();
-        for (Anime anime : results) {
-            HBox choice = row(image(covers, anime.coverImage, 36, 50, 7),
-                new VBox(3, label(anime.title, "body"),
-                    label(meta(anime.format) + "  ·  " + (anime.year == null ? "—" : meta(anime.year)), "tiny")), spacer());
-            choice.getStyleClass().add("suggestion"); choice.setAccessibleText(anime.title);
-            choice.setAccessibleRole(AccessibleRole.BUTTON); choice.setFocusTraversable(true);
-            choice.setOnMouseClicked(click -> { hideSuggestions(suggestions); showDetails(anime, false); });
-            choice.setOnKeyPressed(key -> { if (key.getCode() == KeyCode.ENTER) { hideSuggestions(suggestions); showDetails(anime, false); } });
-            choice.setMaxWidth(Double.MAX_VALUE); suggestions.getChildren().add(choice);
+
+    private final class DiscoverSuggestions {
+        private final PseudoClass highlighted = PseudoClass.getPseudoClass("highlighted");
+        private final Popup popup = new Popup();
+        private final Label message = label("", "suggestion-message");
+        private final VBox choices = new VBox(3);
+        private final VBox panel = new VBox(3, message, choices);
+        private final TextField search;
+        private final VBox content;
+        private final Button all;
+        private List<Anime> displayed = List.of();
+        private int selected = -1;
+
+        DiscoverSuggestions(TextField search, VBox content) {
+            this.search = search;
+            this.content = content;
+            panel.getStyleClass().add("suggestions");
+            message.managedProperty().bind(message.visibleProperty());
+            all = button(t("Vedi tutti i risultati", "See all results"), "suggestion-all", () -> onlineSearch(search.getText(), content, this));
+            all.setId("suggestion-all");
+            all.setMaxWidth(Double.MAX_VALUE);
+            popup.setAutoHide(true);
+            popup.setHideOnEscape(false);
+            popup.setConsumeAutoHidingEvents(false);
+            popup.getContent().add(panel);
+            popup.setOnHidden(e -> select(-1));
+            popup.setOnAutoHide(e -> {
+                searchGeneration++;
+                searchDelay.stop();
+            });
+            search.sceneProperty().addListener((obs, old, scene) -> { if (scene == null) hide(); });
         }
-        if (results.isEmpty() || search.getScene() == null) { hideSuggestions(suggestions); return; }
-        Button all = button(t("Vedi tutti i risultati", "See all results"), "suggestion-all", () -> onlineSearch(query, content, suggestions));
-        all.setMaxWidth(Double.MAX_VALUE); suggestions.getChildren().add(all);
-        double popupWidth = Math.min(590, Math.max(390, search.getWidth() * .38));
-        suggestions.setMinWidth(popupWidth); suggestions.setPrefWidth(popupWidth); suggestions.setMaxWidth(popupWidth);
-        suggestions.setVisible(true); suggestions.setManaged(true);
-        Point2D anchor = search.localToScreen(0, search.getHeight() + 6);
-        if (anchor != null && suggestions.getProperties().get("popup") instanceof Popup popup) popup.show(search, anchor.getX(), anchor.getY());
+
+        void show(List<Anime> results) {
+            update(results, "");
+        }
+
+        void showMessage(String text) {
+            update(List.of(), text);
+        }
+
+        private void update(List<Anime> results, String text) {
+            if (!search.isFocused()) return;
+            Point2D anchor = search.localToScreen(0, search.getHeight() + 7);
+            if (anchor == null) return;
+            double width = Math.min(490, search.getWidth());
+            List<Anime> visible = List.copyOf(results.subList(0, Math.min(5, results.size())));
+            boolean unchanged = panel.getPrefWidth() == width && message.getText().equals(text) && sameRows(visible);
+            displayed = visible;
+            if (!unchanged) renderRows(text, width);
+            if (popup.isShowing()) {
+                popup.setAnchorX(anchor.getX());
+                popup.setAnchorY(anchor.getY());
+            } else popup.show(search, anchor.getX(), anchor.getY());
+        }
+
+        private boolean sameRows(List<Anime> results) {
+            if (displayed.size() != results.size()) return false;
+            for (int i = 0; i < displayed.size(); i++) {
+                Anime old = displayed.get(i);
+                Anime current = results.get(i);
+                if (old.id != current.id || !Objects.equals(old.title, current.title) || !Objects.equals(old.coverImage, current.coverImage)
+                    || !Objects.equals(old.format, current.format) || !Objects.equals(old.year, current.year)) return false;
+            }
+            return true;
+        }
+
+        private void renderRows(String text, double width) {
+            panel.setMinWidth(width);
+            panel.setPrefWidth(width);
+            panel.setMaxWidth(width);
+            Node highlightedChoice = selected < 0 ? null : choices.getChildren().get(selected);
+            String remembered = highlightedChoice == null ? null : highlightedChoice.getId();
+            select(-1);
+            List<Node> rows = new ArrayList<>();
+            for (Anime anime : displayed) {
+                int rowIndex = rows.size();
+                Label name = label(anime.title, "suggestion-title");
+                name.setWrapText(false);
+                name.setMinWidth(0);
+                VBox description = new VBox(2, name,
+                    label(meta(anime.format) + "  ·  " + (anime.year == null ? "—" : meta(anime.year)), "tiny"));
+                description.setMinWidth(0);
+                HBox.setHgrow(description, Priority.ALWAYS);
+                Button choice = button("", "suggestion", () -> {
+                    searchGeneration++;
+                    searchDelay.stop();
+                    hide();
+                    showDetails(displayed.get(rowIndex), false);
+                });
+                choice.setId("suggestion-" + anime.id);
+                choice.setAccessibleText(anime.title);
+                choice.setMaxWidth(Double.MAX_VALUE);
+                HBox graphic = row(image(covers, anime.coverImage, 32, 44, 8), description);
+                graphic.setMinWidth(0);
+                graphic.setPrefWidth(width - 36);
+                graphic.setMaxWidth(width - 36);
+                choice.setGraphic(graphic);
+                rows.add(choice);
+            }
+            rows.add(all);
+            message.setText(text);
+            message.setVisible(!text.isEmpty());
+            choices.getChildren().setAll(rows);
+            for (int index = 0; index < choices.getChildren().size(); index++)
+                if (Objects.equals(remembered, choices.getChildren().get(index).getId())) select(index);
+        }
+
+        boolean isShowing() { return popup.isShowing(); }
+        void hide() { popup.hide(); }
+
+        boolean move(int direction) {
+            int count = choices.getChildren().size();
+            if (!isShowing() || count == 0) return false;
+            select(selected < 0 ? (direction > 0 ? 0 : count - 1) : Math.floorMod(selected + direction, count));
+            return true;
+        }
+
+        boolean openSelected() {
+            if (!isShowing() || selected < 0) return false;
+            ((Button) choices.getChildren().get(selected)).fire();
+            return true;
+        }
+
+        private void select(int index) {
+            if (selected >= 0) choices.getChildren().get(selected).pseudoClassStateChanged(highlighted, false);
+            selected = index;
+            if (selected >= 0) choices.getChildren().get(selected).pseudoClassStateChanged(highlighted, true);
+        }
     }
-    private void hideSuggestions(VBox suggestions) {
-        suggestions.setVisible(false); suggestions.setManaged(false);
-        Object popup = suggestions.getProperties().get("popup");
-        if (popup instanceof Popup overlay) overlay.hide();
-    }
-    private void onlineSearch(String text, VBox content, VBox suggestions) {
+
+    private void onlineSearch(String text, VBox content, DiscoverSuggestions suggestions) {
         String query = text.strip(); if (query.isEmpty() && !discoverFilters.hasFilters()) return;
         searchGeneration++; searchDelay.stop();
-        hideSuggestions(suggestions);
+        suggestions.hide();
         if (carousel != null) { carousel.stop(); carousel = null; }
         DiscoverQuery filter = discoverFilters.withText(query);
         String heading = query.isEmpty() ? t("Risultati", "Results") : t("Risultati per ", "Results for ") + "“" + query + "”";
         content.getChildren().setAll(row(label(heading, "section-title"), spacer(),
-            button(t("Torna a Esplora", "Back to Explore"), "quiet", () -> navigate(Route.DISCOVER))));
+            button(t("Torna a Esplora", "Back to Explore"), "quiet", () -> {
+                discoverFilters = DiscoverQuery.empty();
+                navigate(Route.DISCOVER);
+            })));
         VBox results = new VBox(20, label(t("Ricerca in corso…", "Searching…"), "muted")); content.getChildren().add(results);
-        TilePane grid = new TilePane(20, 24);
+        TilePane grid = posterGrid(20, 24);
         Button more = button(t("Carica altri", "Load more"), "load-more", () -> {});
         more.setMaxWidth(Double.MAX_VALUE); more.setMinHeight(54);
         int[] page = {1}; Set<Integer> shown = new HashSet<>();
@@ -1192,7 +2000,12 @@ public class App extends Application {
             async(() -> api.search(filter, page[0], 30), results, found -> {
                 if (page[0] == 1) results.getChildren().setAll(grid, more);
                 int added = 0;
-                for (Anime anime : found) if (shown.add(anime.id)) { Node card = animeCard(anime); grid.getChildren().add(card); entrance(card, added++); }
+                for (Anime anime : found) if (shown.add(anime.id)) {
+                    Node card = animeCard(anime);
+                    grid.getChildren().add(card);
+                    if (page[0] == 1 && added < 8) entrance(card, added);
+                    added++;
+                }
                 page[0]++; more.setDisable(false);
                 if (found.size() < 30 || added == 0) { more.setVisible(false); more.setManaged(false); }
                 if (shown.isEmpty()) results.getChildren().setAll(label(t("Nessun anime trovato.", "No anime found."), "muted"));
@@ -1202,28 +2015,11 @@ public class App extends Application {
     }
     private void discoverHome(VBox content, ScrollPane scrolling) {
         content.getChildren().clear();
-        BannerDeck deck = new BannerDeck(); deck.getStyleClass().add("banner-deck");
-        deck.setMaxWidth(Double.MAX_VALUE); deck.setMinWidth(0);
-        StackPane banner = new RatioPane();
-        banner.getChildren().add(label(t("Cerco le storie del momento…", "Finding today's trending stories…"), "subtitle"));
-        banner.setMaxWidth(1280); banner.setMinWidth(0); banner.setPrefWidth(1280);
-        Rectangle bannerClip = new Rectangle();
-        bannerClip.widthProperty().bind(banner.widthProperty()); bannerClip.heightProperty().bind(banner.heightProperty());
-        bannerClip.setArcWidth(40); bannerClip.setArcHeight(40); banner.setClip(bannerClip);
-        banner.getStyleClass().add("banner");
-        deck.getChildren().add(banner);
+        carouselInView = true;
+        BannerDeck deck = new BannerDeck();
         HBox bannerArea = new HBox(deck); bannerArea.setAlignment(Pos.TOP_CENTER);
         HBox.setHgrow(deck, Priority.ALWAYS); content.getChildren().add(bannerArea);
-        async(() -> api.browse("TRENDING", null, 1, 8), deck, anime -> buildBanner(deck, banner, anime),
-            error -> {
-                VBox fallback = new VBox(12, label(t("Una nuova storia ti aspetta", "A new story awaits"), "hero-title"),
-                    label(t("Banner momentaneamente non disponibile. Puoi continuare a esplorare.", "The banner is temporarily unavailable. You can still explore."), "muted"),
-                    button(t("Riprova", "Retry"), "quiet", () -> discoverHome(content, scrolling)));
-                fallback.setPadding(new Insets(30)); banner.getChildren().setAll(fallback);
-            });
-        content.getChildren().add(new VBox(6, label(routeName(Route.DISCOVER), "title"),
-            label(prefs.genres().isEmpty() ? t("Trova il tuo prossimo anime.", "Find your next anime.")
-                : t("Prima i tuoi generi preferiti, poi nuovi mondi da scoprire.", "Your favourite genres first, then new worlds to discover."), "subtitle")));
+        content.getChildren().add(label(t("Esplora il catalogo", "Explore the catalogue"), "title"));
         List<DiscoverSection> sections = new ArrayList<>();
         for (String favourite : prefs.genres())
             sections.add(new DiscoverSection("♥ " + genre(favourite), "GENRE", favourite, content, scrolling));
@@ -1232,40 +2028,61 @@ public class App extends Application {
         for (String other : Preferences.GENRES)
             if (!prefs.genres().contains(other)) sections.add(new DiscoverSection(genre(other), "GENRE", other, content, scrolling));
         for (DiscoverSection section : sections) content.getChildren().add(section.box);
-        Runnable visibility = () -> sections.forEach(DiscoverSection::checkVisibility);
-        ChangeListener<Number> scrollListener = (obs, old, value) -> visibility.run();
+        boolean[] checkQueued = {false};
+        Runnable scheduleVisibility = () -> {
+            if (checkQueued[0]) return;
+            checkQueued[0] = true;
+            Platform.runLater(() -> {
+                checkQueued[0] = false;
+                if (deck.getScene() == null) return;
+                Bounds viewport = scrolling.localToScene(scrolling.getLayoutBounds());
+                Bounds bannerBounds = deck.localToScene(deck.getLayoutBounds());
+                boolean bannerVisible = bannerBounds.getMaxY() > viewport.getMinY()
+                    && bannerBounds.getMinY() < viewport.getMaxY();
+                if (carouselInView != bannerVisible) {
+                    carouselInView = bannerVisible;
+                    syncCarousel();
+                }
+                for (DiscoverSection section : sections) section.checkVisibility(viewport);
+            });
+        };
+        ChangeListener<Number> scrollListener = (obs, old, value) -> scheduleVisibility.run();
         scrolling.vvalueProperty().addListener(scrollListener);
-        ChangeListener<Bounds> viewportListener = (obs, old, value) -> visibility.run();
+        ChangeListener<Bounds> viewportListener = (obs, old, value) -> scheduleVisibility.run();
         scrolling.viewportBoundsProperty().addListener(viewportListener);
-        // Remove listeners when this home is replaced by a category/search.
-        banner.sceneProperty().addListener((obs, old, scene) -> {
+        // The deck stays attached while a slide changes and detaches when leaving Discover home.
+        deck.sceneProperty().addListener((obs, old, scene) -> {
             if (scene == null) {
                 scrolling.vvalueProperty().removeListener(scrollListener);
                 scrolling.viewportBoundsProperty().removeListener(viewportListener);
+            } else {
+                scheduleVisibility.run();
             }
         });
-        Platform.runLater(visibility);
+        scheduleVisibility.run();
     }
     private final class DiscoverSection {
         final VBox box = new VBox(14);
         final VBox items = new VBox();
         final String mode, filter;
-        final ScrollPane scrolling;
         List<Anime> data;
         boolean loading, visible;
         DiscoverSection(String title, String mode, String filter, VBox content, ScrollPane scrolling) {
-            this.mode = mode; this.filter = filter; this.scrolling = scrolling;
-            box.setMinHeight(410); items.setMinHeight(355);
+            this.mode = mode; this.filter = filter;
+            items.setMinHeight(422);
             box.getChildren().addAll(row(label(title, "section-title"), spacer(),
                 button(t("Vedi tutti", "See all") + " →", "quiet", () -> categoryPage(content, title, mode, filter, scrolling))), items);
         }
-        void checkVisibility() {
-            if (box.getScene() == null) return;
-            Bounds bounds = box.localToScene(box.getBoundsInLocal());
-            Bounds viewport = scrolling.localToScene(scrolling.getBoundsInLocal());
-            boolean near = bounds.getMaxY() >= viewport.getMinY() - 350 && bounds.getMinY() <= viewport.getMaxY() + 350;
+        void checkVisibility(Bounds viewport) {
+            Bounds bounds = box.localToScene(box.getLayoutBounds());
+            // Keep nearby rows warm when scrolling back across a boundary.
+            double margin = visible ? 750 : 260;
+            boolean near = bounds.getMaxY() >= viewport.getMinY() - margin && bounds.getMinY() <= viewport.getMaxY() + margin;
             if (!near) {
-                if (visible) { visible = false; items.getChildren().clear(); }
+                if (visible) {
+                    visible = false;
+                    items.getChildren().clear();
+                }
                 return;
             }
             if (visible) return;
@@ -1281,103 +2098,555 @@ public class App extends Application {
         }
         void show() {
             if (data.isEmpty()) { items.getChildren().setAll(label(t("Nessun titolo disponibile.", "No titles available."), "muted")); return; }
-            HBox cards = new HBox(18); cards.setPadding(new Insets(7, 10, 20, 10));
-            for (Anime anime : data) cards.getChildren().add(animeCard(anime));
-            ScrollPane strip = new ScrollPane(cards);
-            strip.setPrefViewportHeight(382);
-            strip.setFitToHeight(true); strip.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER); strip.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-            HBox controls = row(spacer(), button("←", "quiet", () -> horizontal(strip, -0.6)), button("→", "quiet", () -> horizontal(strip, 0.6)));
-            strip.addEventFilter(ScrollEvent.SCROLL, e -> {
-                if (e.isShiftDown() || Math.abs(e.getDeltaX()) > Math.abs(e.getDeltaY())) {
-                    horizontal(strip, (e.getDeltaX() != 0 ? -e.getDeltaX() : -e.getDeltaY()) / 360); e.consume();
-                }
-            });
-            items.getChildren().setAll(strip, controls);
+            DiscoverStrip strip = new DiscoverStrip(data);
+            HBox controls = row(spacer(), button("←", "quiet", () -> strip.page(-1)),
+                button("→", "quiet", () -> strip.page(1)));
+            items.getChildren().setAll(strip.pane, controls);
         }
     }
-    private void horizontal(ScrollPane pane, double increment) {
-        Timeline move = new Timeline(new KeyFrame(Duration.millis(200),
-            new KeyValue(pane.hvalueProperty(), Math.max(0, Math.min(1, pane.getHvalue() + increment)), Interpolator.EASE_BOTH)));
-        move.play();
-    }
-    private void buildBanner(StackPane deck, StackPane banner, List<Anime> anime) { buildBanner(deck, banner, anime, 0); }
-    private void buildBanner(StackPane deck, StackPane banner, List<Anime> anime, int initial) {
-        if (anime.isEmpty()) { banner.getChildren().setAll(label(t("Nessuna tendenza disponibile", "No trending titles available"), "subtitle")); return; }
-        List<Anime> picks = anime.stream().filter(a -> a.bannerImage != null && !a.bannerImage.isBlank()).limit(6).toList();
-        if (picks.isEmpty()) picks = anime.stream().limit(6).toList();
-        final List<Anime> slides = picks; int[] position = {Math.floorMod(initial, picks.size())};
-        int[] direction = {1};
-        Runnable[] display = new Runnable[1];
-        display[0] = () -> {
-            Anime item = slides.get(position[0]);
-            ImageView background = new ImageView(); background.setPreserveRatio(false);
-            background.fitWidthProperty().bind(banner.widthProperty()); background.fitHeightProperty().bind(banner.heightProperty());
-            loadBannerImage(background, item);
-            Region shade = new Region(); shade.getStyleClass().add("banner-gradient");
-            VBox caption = new VBox(10, label(t("ORA DI TENDENZA", "TRENDING NOW"), "eyebrow"), label(item.title, "hero-title"),
-                label(meta(item.format) + "  ·  " + meta(item.year), "subtitle"),
-                button(t("Scopri l'anime", "Explore this anime") + " →", "primary", () -> showDetails(item, false)));
-            caption.setAlignment(Pos.CENTER_LEFT); caption.setMaxWidth(690); caption.setPadding(new Insets(32));
-            StackPane.setAlignment(caption, Pos.CENTER_LEFT);
-            HBox controls = row(button("←", "banner-button", () -> { direction[0] = -1; position[0] = Math.floorMod(position[0] - 1, slides.size()); display[0].run(); restartCarousel(); }),
-                label((position[0] + 1) + " / " + slides.size(), "tiny"),
-                button("→", "banner-button", () -> { direction[0] = 1; position[0] = (position[0] + 1) % slides.size(); display[0].run(); restartCarousel(); }));
-            controls.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
-            StackPane.setAlignment(controls, Pos.BOTTOM_RIGHT); StackPane.setMargin(controls, new Insets(24));
-            StackPane slide = new StackPane(background, shade, caption, controls);
-            slide.setOnMouseClicked(e -> { if (e.getTarget() == slide || e.getTarget() == background || e.getTarget() == shade) showDetails(item, false); });
 
-            List<Node> previous = List.copyOf(banner.getChildren());
-            slide.setOpacity(0); slide.setTranslateX(direction[0] * 34);
-            banner.getChildren().add(slide);
-            FadeTransition fade = new FadeTransition(Duration.millis(310), slide); fade.setToValue(1);
-            TranslateTransition move = new TranslateTransition(Duration.millis(360), slide); move.setToX(0); move.setInterpolator(Interpolator.EASE_OUT);
-            ParallelTransition reveal = new ParallelTransition(fade, move);
-            reveal.setOnFinished(event -> banner.getChildren().setAll(slide)); reveal.play();
-            for (Node old : previous) {
-                FadeTransition away = new FadeTransition(Duration.millis(220), old); away.setToValue(0); away.play();
+    /** Fixed-width slots let the scrollbar represent every title while only visible cards exist. */
+    private final class DiscoverStrip {
+        private static final double CARD_WIDTH = 200, STEP = 218, PADDING = 10;
+        private final HBox cards = new HBox(STEP - CARD_WIDTH);
+        private final ScrollPane pane = new ScrollPane(cards);
+        private final Timeline motion = new Timeline();
+        private final List<Anime> titles;
+        private final List<StackPane> slots = new ArrayList<>();
+        private int first, end;
+        private double target;
+
+        DiscoverStrip(List<Anime> titles) {
+            this.titles = titles;
+            cards.setPadding(new Insets(7, PADDING, 20, PADDING));
+            cards.setAlignment(Pos.TOP_CENTER);
+            for (Anime title : titles) {
+                StackPane slot = new StackPane();
+                slot.setAlignment(Pos.TOP_CENTER);
+                slot.setMinWidth(CARD_WIDTH);
+                slot.setPrefWidth(CARD_WIDTH);
+                slot.setMaxWidth(CARD_WIDTH);
+                slots.add(slot);
+            }
+            cards.getChildren().setAll(slots);
+            pane.setId("discover-strip");
+            pane.setMinHeight(382);
+            pane.setPrefHeight(382);
+            pane.setMaxHeight(382);
+            pane.setFitToWidth(true);
+            pane.setFitToHeight(true);
+            pane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+            pane.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+            pane.viewportBoundsProperty().addListener((obs, old, bounds) -> updateVisibleCards());
+            pane.hvalueProperty().addListener((obs, old, value) -> updateVisibleCards());
+            pane.sceneProperty().addListener((obs, old, scene) -> { if (scene == null) motion.stop(); });
+            pane.addEventFilter(ScrollEvent.SCROLL, event -> {
+                boolean horizontal = Math.abs(event.getDeltaX()) > Math.abs(event.getDeltaY());
+                if (!event.isShiftDown() && !horizontal) return;
+                double range = overflow();
+                if (range == 0) return;
+                double delta = horizontal ? event.getDeltaX() : event.getDeltaY();
+                motion.stop();
+                pane.setHvalue(clamp(pane.getHvalue() - delta * (event.isDirect() ? 1 : 2) / range));
+                event.consume();
+            });
+        }
+
+        private double overflow() {
+            double total = PADDING * 2 + (titles.size() - 1) * STEP + CARD_WIDTH;
+            return Math.max(0, total - pane.getViewportBounds().getWidth());
+        }
+
+        private void updateVisibleCards() {
+            double width = pane.getViewportBounds().getWidth();
+            if (width <= 0) return;
+            double left = overflow() * pane.getHvalue() - PADDING;
+            int nextFirst = Math.max(0, (int) Math.floor(left / STEP) - 1);
+            int nextEnd = Math.min(titles.size(), (int) Math.ceil((left + width) / STEP) + 1);
+            for (int index = first; index < end; index++)
+                if (index < nextFirst || index >= nextEnd) slots.get(index).getChildren().clear();
+            for (int index = nextFirst; index < nextEnd; index++)
+                if (index < first || index >= end) slots.get(index).getChildren().add(animeCard(titles.get(index)));
+            first = nextFirst;
+            end = nextEnd;
+        }
+
+        void page(int direction) {
+            double range = overflow();
+            if (range == 0) return;
+            double from = motion.getStatus() == Animation.Status.RUNNING ? target : pane.getHvalue();
+            target = clamp(from + direction * pane.getViewportBounds().getWidth() * .85 / range);
+            motion.stop();
+            motion.getKeyFrames().setAll(new KeyFrame(Duration.millis(180),
+                new KeyValue(pane.hvalueProperty(), target, Interpolator.EASE_OUT)));
+            motion.playFromStart();
+        }
+
+        private double clamp(double value) {
+            return Math.max(0, Math.min(1, value));
+        }
+    }
+    private final class BannerDeck extends StackPane {
+        private static final double ASPECT_RATIO = 16.0 / 9;
+        private static final double MAX_FEATURED_WIDTH = 1040;
+        private static final double PANEL_GAP = 14;
+
+        private final StackPane banner = bannerFrame("banner");
+        private final StackPane left = bannerFrame("banner-side");
+        private final StackPane right = bannerFrame("banner-side");
+        private final ImageView posterImage = new ImageView();
+        private final StackPane poster = new StackPane(posterImage);
+        private final BannerArt artwork = new BannerArt(banner, posterImage);
+        private final BannerArt leftArt = new BannerArt(left, null);
+        private final BannerArt rightArt = new BannerArt(right, null);
+        private final Label section = label("", "banner-kicker");
+        private final Label title = label("", "banner-title");
+        private final Label metadata = label("", "banner-meta");
+        private final Label count = label("", "banner-count");
+        private final Label previousTitle = label("", "banner-side-title");
+        private final Label nextTitle = label("", "banner-side-title");
+        private final HBox progress = new HBox(6);
+        private final HBox positionIndicator = new HBox(12, progress, count);
+        private final Button open = button(t("Apri scheda", "Open details"), "banner-open", this::openCurrent);
+        private final Button previous = arrow(-1);
+        private final Button next = arrow(1);
+        private final Button retry = button(t("Riprova", "Retry"), "quiet", this::fetch);
+        private final VBox caption = new VBox(10, section, title, metadata, open);
+        private final HBox footer = new HBox(12, positionIndicator, spacer(), retry);
+        private final Region shade = new Region();
+        private List<Anime> slides = List.of();
+        private int position;
+        private Animation captionMotion;
+
+        BannerDeck() {
+            getStyleClass().add("banner-deck");
+            setPrefWidth(1160);
+            setMaxWidth(Double.MAX_VALUE);
+            setMinWidth(0);
+
+            configureNeighbour(left, leftArt, previous, previousTitle, -1);
+            configureNeighbour(right, rightArt, next, nextTitle, 1);
+            artwork.setId("discover-featured-backdrop");
+            artwork.outgoing.setId("discover-featured-outgoing");
+            left.setVisible(false);
+            right.setVisible(false);
+
+            shade.getStyleClass().add("banner-gradient");
+            shade.setMouseTransparent(true);
+            configurePoster();
+            caption.getStyleClass().add("banner-caption");
+            caption.setAlignment(Pos.CENTER_LEFT);
+            caption.setPickOnBounds(false);
+            caption.setMaxHeight(Region.USE_PREF_SIZE);
+            caption.maxWidthProperty().bind(banner.widthProperty().multiply(.61));
+            title.setMaxHeight(126);
+            open.focusedProperty().addListener((obs, before, focused) -> syncCarousel());
+            StackPane.setAlignment(caption, Pos.BOTTOM_LEFT);
+
+            progress.setAlignment(Pos.CENTER_LEFT);
+            positionIndicator.setAlignment(Pos.CENTER_LEFT);
+            positionIndicator.setMouseTransparent(true);
+            footer.setAlignment(Pos.CENTER_LEFT);
+            footer.getStyleClass().add("banner-footer");
+            footer.setPickOnBounds(false);
+            footer.setMaxHeight(Region.USE_PREF_SIZE);
+            StackPane.setAlignment(footer, Pos.BOTTOM_CENTER);
+            banner.setOnMouseClicked(event -> {
+                if (event.getTarget() == banner) openCurrent();
+            });
+            getChildren().addAll(left, right, banner);
+
+            // ScrollPane can attach its content after the first pulse. Wait before using the deck as the async owner.
+            sceneProperty().addListener((obs, before, scene) -> {
+                if (scene != null) {
+                    fetch();
+                } else {
+                    stopCarousel();
+                }
+            });
+            setOnMouseEntered(event -> syncCarousel());
+            setOnMouseExited(event -> syncCarousel());
+        }
+
+        private void configureNeighbour(StackPane panel, BannerArt art, Button control, Label name, int direction) {
+            panel.setId(direction < 0 ? "discover-featured-left-panel" : "discover-featured-right-panel");
+            Region veil = new Region();
+            veil.getStyleClass().add("banner-side-veil");
+            veil.setMouseTransparent(true);
+            name.setMouseTransparent(true);
+            name.setMaxHeight(48);
+            name.visibleProperty().bind(panel.widthProperty().greaterThanOrEqualTo(205));
+            name.managedProperty().bind(name.visibleProperty());
+            HBox navigation = direction < 0 ? new HBox(13, control, name) : new HBox(13, name, control);
+            navigation.getStyleClass().add("banner-neighbour-navigation");
+            navigation.setPickOnBounds(false);
+            navigation.setMaxHeight(Region.USE_PREF_SIZE);
+            navigation.alignmentProperty().bind(Bindings.when(name.visibleProperty())
+                .then(direction < 0 ? Pos.CENTER_LEFT : Pos.CENTER_RIGHT).otherwise(Pos.CENTER));
+            StackPane.setAlignment(navigation, Pos.BOTTOM_CENTER);
+            panel.getChildren().addAll(art.outgoing, art, veil, navigation);
+            panel.setOnMouseClicked(event -> {
+                if (event.getButton() == MouseButton.PRIMARY && event.getTarget() == panel) moveManually(direction);
+            });
+        }
+
+        private void configurePoster() {
+            posterImage.setId("discover-featured-cover");
+            posterImage.setPreserveRatio(true);
+            posterImage.setSmooth(true);
+            posterImage.fitWidthProperty().bind(banner.widthProperty().multiply(.29));
+            posterImage.fitHeightProperty().bind(banner.heightProperty().multiply(.69));
+            Rectangle clip = new Rectangle();
+            clip.setArcWidth(16);
+            clip.setArcHeight(16);
+            posterImage.layoutBoundsProperty().addListener((obs, before, bounds) -> {
+                clip.setWidth(bounds.getWidth());
+                clip.setHeight(bounds.getHeight());
+            });
+            posterImage.setClip(clip);
+            poster.getStyleClass().add("banner-poster");
+            poster.setMouseTransparent(true);
+            poster.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+            poster.visibleProperty().bind(posterImage.imageProperty().isNotNull());
+            StackPane.setAlignment(poster, Pos.CENTER_RIGHT);
+            StackPane.setMargin(poster, new Insets(0, 46, 28, 0));
+        }
+
+        private StackPane bannerFrame(String style) {
+            StackPane frame = new StackPane();
+            frame.setManaged(false);
+            frame.getStyleClass().add(style);
+            Rectangle clip = new Rectangle();
+            clip.setArcWidth(36);
+            clip.setArcHeight(36);
+            clip.widthProperty().bind(frame.widthProperty());
+            clip.heightProperty().bind(frame.heightProperty());
+            frame.setClip(clip);
+            return frame;
+        }
+
+        private Button arrow(int direction) {
+            Button arrow = button("", "banner-button", () -> moveManually(direction));
+            SVGPath chevron = new SVGPath();
+            chevron.setContent(direction < 0 ? "M 11 2 L 4 9 L 11 16" : "M 5 2 L 12 9 L 5 16");
+            chevron.getStyleClass().add("banner-chevron");
+            chevron.setMouseTransparent(true);
+            arrow.setGraphic(chevron);
+            arrow.setId(direction < 0 ? "discover-featured-previous" : "discover-featured-next");
+            arrow.setAccessibleText(direction < 0 ? t("Anime precedente", "Previous anime") : t("Anime successivo", "Next anime"));
+            arrow.focusedProperty().addListener((obs, before, focused) -> syncCarousel());
+            return arrow;
+        }
+
+        private void fetch() {
+            stopCarousel();
+            slides = List.of();
+            left.setVisible(false);
+            right.setVisible(false);
+            ProgressIndicator spinner = new ProgressIndicator();
+            spinner.setMaxSize(24, 24);
+            showMessage(spinner, label(t("Caricamento tendenze…", "Loading trending anime…"), "muted"));
+            async(() -> api.browse("TRENDING", null, 1, 8), this, found -> {
+                if (found.isEmpty()) showFallback();
+                else showSlides(found, t("Di tendenza", "Trending"), false);
+            }, failure -> showFallback());
+        }
+
+        private void showFallback() {
+            List<Anime> saved = library.all().stream().filter(anime -> hasArtwork(anime.coverImage) || hasArtwork(anime.bannerImage))
+                .limit(6).toList();
+            if (saved.isEmpty()) {
+                showMessage(label(t("Tendenze non disponibili", "Trending anime unavailable"), "section-title"),
+                    button(t("Riprova", "Retry"), "quiet", this::fetch));
+            } else {
+                showSlides(saved, t("Dalla tua lista", "From your library"), true);
+            }
+        }
+
+        private void showMessage(Node... children) {
+            VBox state = new VBox(12, children);
+            state.setAlignment(Pos.CENTER);
+            banner.getChildren().setAll(state);
+        }
+
+        private void showSlides(List<Anime> found, String category, boolean fallback) {
+            slides = found.stream().limit(6).toList();
+            position = 0;
+            section.setText(category);
+            retry.setVisible(fallback);
+            retry.setManaged(fallback);
+            boolean multiple = slides.size() > 1;
+            left.setVisible(multiple);
+            right.setVisible(multiple);
+            positionIndicator.setVisible(multiple);
+            positionIndicator.setManaged(multiple);
+            banner.getChildren().setAll(artwork.outgoing, artwork, shade, poster, caption, footer);
+            showCurrent(0);
+            if (multiple) {
+                carousel = new Timeline(new KeyFrame(Duration.seconds(8), event -> move(1)));
+                carousel.setCycleCount(Animation.INDEFINITE);
+                carouselHoverTarget = this;
+                syncCarousel();
+            }
+        }
+
+        private void openCurrent() {
+            if (!slides.isEmpty()) showDetails(slides.get(position), false);
+        }
+
+        private void moveManually(int direction) {
+            move(direction);
+            if (carousel != null) {
+                carousel.jumpTo(Duration.ZERO);
+                syncCarousel();
+            }
+        }
+
+        private void move(int direction) {
+            if (slides.size() < 2) return;
+            position = Math.floorMod(position + direction, slides.size());
+            showCurrent(direction);
+        }
+
+        private void showCurrent(int direction) {
+            Anime item = slides.get(position);
+            Image outgoingFeature = artwork.getImage();
+            Image incomingPreview = direction == 0 ? null : (direction > 0 ? rightArt : leftArt).getImage();
+            title.setText(item.title == null || item.title.isBlank() ? t("Anime senza titolo", "Untitled anime") : item.title);
+            title.getStyleClass().removeAll("banner-title-long", "banner-title-very-long");
+            if (title.getText().length() > 65) title.getStyleClass().add("banner-title-very-long");
+            else if (title.getText().length() > 38) title.getStyleClass().add("banner-title-long");
+            metadata.setText(meta(item.format) + "  ·  " + meta(item.year));
+            artwork.show(item, incomingPreview, direction);
+            count.setText((position + 1) + " / " + slides.size());
+            count.setAccessibleText("Anime " + (position + 1) + t(" di ", " of ") + slides.size());
+
+            if (slides.size() > 1) {
+                Anime before = slides.get(Math.floorMod(position - 1, slides.size()));
+                Anime after = slides.get((position + 1) % slides.size());
+                leftArt.show(before, direction > 0 ? outgoingFeature : null, direction);
+                rightArt.show(after, direction < 0 ? outgoingFeature : null, direction);
+                previousTitle.setText(before.title);
+                nextTitle.setText(after.title);
+                previous.setAccessibleText(t("Anime precedente", "Previous anime") + " · " + previousTitle.getText());
+                next.setAccessibleText(t("Anime successivo", "Next anime") + " · " + nextTitle.getText());
+                progress.getChildren().clear();
+                for (int i = 0; i < slides.size(); i++) {
+                    Region step = new Region();
+                    step.getStyleClass().add("banner-step");
+                    if (i == position) step.getStyleClass().add("banner-step-active");
+                    progress.getChildren().add(step);
+                }
             }
 
-            StackPane left = bannerPreview(deck, slides.get(Math.floorMod(position[0] - 1, slides.size())), Pos.CENTER_LEFT);
-            StackPane right = bannerPreview(deck, slides.get((position[0] + 1) % slides.size()), Pos.CENTER_RIGHT);
-            deck.getChildren().setAll(left, right, banner);
-            FadeTransition sides = new FadeTransition(Duration.millis(360), left); sides.setFromValue(0); sides.setToValue(.46); sides.play();
-            FadeTransition sidesRight = new FadeTransition(Duration.millis(360), right); sidesRight.setFromValue(0); sidesRight.setToValue(.46); sidesRight.play();
-        };
-        display[0].run();
-        if (carousel != null) carousel.stop();
-        carousel = new Timeline(new KeyFrame(Duration.seconds(7), e -> { direction[0] = 1; position[0] = (position[0] + 1) % slides.size(); display[0].run(); }));
-        carousel.setCycleCount(Animation.INDEFINITE);
-        deck.setOnMouseEntered(e -> carousel.pause()); deck.setOnMouseExited(e -> syncCarousel());
-        syncCarousel();
+            if (captionMotion != null) captionMotion.stop();
+            caption.setTranslateX(direction * 14);
+            caption.setOpacity(.66);
+            FadeTransition fade = new FadeTransition(Duration.millis(180), caption);
+            fade.setToValue(1);
+            TranslateTransition slide = new TranslateTransition(Duration.millis(220), caption);
+            slide.setToX(0);
+            slide.setInterpolator(Interpolator.EASE_OUT);
+            captionMotion = new ParallelTransition(fade, slide);
+            captionMotion.play();
+        }
+
+        private boolean isInteracting() {
+            return isHover() || previous.isFocused() || next.isFocused() || open.isFocused();
+        }
+
+        private void stopCarousel() {
+            if (carouselHoverTarget == this) {
+                if (carousel != null) carousel.stop();
+                carousel = null;
+                carouselHoverTarget = null;
+            }
+            if (captionMotion != null) captionMotion.stop();
+            artwork.clear();
+            leftArt.clear();
+            rightArt.clear();
+        }
+
+        @Override public Orientation getContentBias() { return Orientation.HORIZONTAL; }
+        @Override protected double computeMinHeight(double width) { return featuredHeight(width); }
+        @Override protected double computePrefHeight(double width) { return featuredHeight(width); }
+        @Override protected double computeMaxHeight(double width) { return featuredHeight(width); }
+
+        private double featuredHeight(double width) {
+            return featuredWidth(width > 0 ? width : 1160) / ASPECT_RATIO;
+        }
+
+        private double featuredWidth(double width) {
+            return Math.min(MAX_FEATURED_WIDTH, width * .73);
+        }
+
+        @Override protected void layoutChildren() {
+            double width = getWidth();
+            double height = featuredHeight(width);
+            double centralWidth = featuredWidth(width);
+            double sideWidth = Math.max(0, (width - centralWidth) / 2 - PANEL_GAP);
+            double sideHeight = height * .88;
+            double sideY = (height - sideHeight) / 2;
+            left.resizeRelocate(0, sideY, sideWidth, sideHeight);
+            right.resizeRelocate(width - sideWidth, sideY, sideWidth, sideHeight);
+            banner.resizeRelocate((width - centralWidth) / 2, 0, centralWidth, height);
+        }
     }
-    private StackPane bannerPreview(StackPane deck, Anime item, Pos alignment) {
-        StackPane preview = new StackPane(); preview.getStyleClass().add("banner-side");
-        preview.setMouseTransparent(true); preview.setMaxWidth(760); preview.setPrefWidth(760);
-        preview.prefHeightProperty().bind(deck.heightProperty().multiply(.88));
-        StackPane.setAlignment(preview, alignment);
-        ImageView image = new ImageView(); image.setPreserveRatio(false);
-        image.fitWidthProperty().bind(preview.widthProperty()); image.fitHeightProperty().bind(preview.heightProperty());
-        image.setEffect(new GaussianBlur(14)); loadBannerImage(image, item); preview.getChildren().add(image);
-        Rectangle clip = new Rectangle(); clip.widthProperty().bind(preview.widthProperty()); clip.heightProperty().bind(preview.heightProperty());
-        clip.setArcWidth(34); clip.setArcHeight(34); preview.setClip(clip);
-        return preview;
+
+    private final class BannerArt extends ImageView {
+        private final ImageView posterImage;
+        private final ImageView outgoing = new ImageView();
+        private long revision;
+        private Timeline motion;
+        private ParallelTransition posterMotion;
+
+        private BannerArt(StackPane frame, ImageView posterImage) {
+            this.posterImage = posterImage;
+            for (ImageView layer : List.of(this, outgoing)) {
+                layer.setManaged(false);
+                layer.setMouseTransparent(true);
+                layer.setSmooth(true);
+                layer.fitWidthProperty().bind(frame.widthProperty());
+                layer.fitHeightProperty().bind(frame.heightProperty());
+                layer.fitWidthProperty().addListener((obs, before, after) -> crop(layer));
+                layer.fitHeightProperty().addListener((obs, before, after) -> crop(layer));
+            }
+        }
+
+        void show(Anime anime, Image preview, int direction) {
+            long request = ++revision;
+            if (motion != null) motion.stop();
+            Image old = getImage() == null ? outgoing.getImage() : getImage();
+            holdOutgoing(old);
+            setImage(null);
+            setTranslateX(0);
+            if (posterImage != null) {
+                if (posterMotion != null) posterMotion.stop();
+                posterImage.setImage(null);
+            }
+            if (preview != null) display(preview, direction);
+            else if (old != null) animate(direction, 0);
+
+            String cover = anime.coverImage;
+            String wide = anime.bannerImage;
+            boolean hasWide = hasArtwork(wide) && !Objects.equals(cover, wide);
+            if (posterImage != null) {
+                covers.load(cover, 520, 740, image -> {
+                    if (revision != request) return;
+                    showPoster(image, direction);
+                    if (getImage() == null || isPortrait(getImage())) display(image, direction);
+                });
+                if (hasWide) covers.load(wide, 1280, 720, image -> {
+                    if (revision == request && (getImage() == null || !isPortrait(image))) display(image, direction);
+                });
+            } else if (hasWide) {
+                covers.loadOrNull(wide, 1280, 720, image -> {
+                    if (revision != request) return;
+                    if (image != null) display(image, direction);
+                    else showNeighbourCover(cover, request, direction);
+                });
+            } else {
+                showNeighbourCover(cover, request, direction);
+            }
+        }
+
+        private void showNeighbourCover(String cover, long request, int direction) {
+            covers.load(cover, 520, 740, image -> {
+                if (revision == request) display(image, direction);
+            });
+        }
+
+        private void showPoster(Image image, int direction) {
+            posterImage.setImage(image);
+            posterImage.setOpacity(.35);
+            posterImage.setTranslateX(direction * 30);
+            FadeTransition fade = new FadeTransition(Duration.millis(230), posterImage);
+            fade.setToValue(1);
+            TranslateTransition slide = new TranslateTransition(Duration.millis(265), posterImage);
+            slide.setToX(0);
+            slide.setInterpolator(Interpolator.EASE_OUT);
+            posterMotion = new ParallelTransition(fade, slide);
+            posterMotion.play();
+        }
+
+        private void display(Image image, int direction) {
+            if (getImage() == image) return;
+            double offset = getTranslateX();
+            double opacity = getOpacity();
+            double outgoingOffset = outgoing.getTranslateX();
+            double outgoingOpacity = outgoing.getOpacity();
+            boolean sliding = getImage() != null && direction != 0 && Math.abs(offset) > 1;
+            if (motion != null) motion.stop();
+            if (getImage() != null && !sliding) {
+                holdOutgoing(getImage());
+                direction = 0;
+            }
+            setImage(image);
+            crop(this);
+            if (sliding) {
+                // A higher-resolution asset may arrive while the neighbour preview is already moving.
+                setOpacity(opacity);
+                setTranslateX(offset);
+                outgoing.setOpacity(outgoingOpacity);
+                outgoing.setTranslateX(outgoingOffset);
+            } else {
+                setOpacity(.13);
+                setTranslateX(direction * Math.min(130, getFitWidth() * .16));
+            }
+            animate(direction, backdropOpacity(image));
+        }
+
+        private void holdOutgoing(Image image) {
+            outgoing.setImage(image);
+            outgoing.setOpacity(image == null ? 0 : backdropOpacity(image));
+            outgoing.setTranslateX(0);
+            crop(outgoing);
+        }
+
+        private void animate(int direction, double opacity) {
+            double duration = direction == 0 ? 180 : 310;
+            double exit = direction * -Math.min(84, getFitWidth() * .11);
+            motion = new Timeline(new KeyFrame(Duration.millis(duration),
+                new KeyValue(translateXProperty(), 0, Interpolator.EASE_OUT),
+                new KeyValue(opacityProperty(), opacity, Interpolator.EASE_OUT),
+                new KeyValue(outgoing.translateXProperty(), exit, Interpolator.EASE_OUT),
+                new KeyValue(outgoing.opacityProperty(), 0, Interpolator.EASE_IN)));
+            motion.setOnFinished(event -> outgoing.setImage(null));
+            motion.play();
+        }
+
+        void clear() {
+            revision++;
+            if (motion != null) motion.stop();
+            if (posterMotion != null) posterMotion.stop();
+            setImage(null);
+            outgoing.setImage(null);
+            if (posterImage != null) posterImage.setImage(null);
+        }
+
+        private boolean isPortrait(Image image) {
+            return image.getWidth() < image.getHeight() * 1.2;
+        }
+
+        private double backdropOpacity(Image image) {
+            return posterImage != null && isPortrait(image) ? .40 : 1;
+        }
+
+        private void crop(ImageView layer) {
+            Image image = layer.getImage();
+            if (image == null || layer.getFitWidth() <= 0 || layer.getFitHeight() <= 0) return;
+            double ratio = layer.getFitWidth() / layer.getFitHeight();
+            double width = Math.min(image.getWidth(), image.getHeight() * ratio);
+            double height = Math.min(image.getHeight(), image.getWidth() / ratio);
+            double focusY = image.getHeight() > image.getWidth() ? .29 : .5;
+            layer.setViewport(new Rectangle2D((image.getWidth() - width) / 2, (image.getHeight() - height) * focusY, width, height));
+        }
     }
-    private void loadBannerImage(ImageView view, Anime item) {
-        String url = item.bannerImage == null || item.bannerImage.isBlank() ? item.coverImage : item.bannerImage;
-        covers.load(url, 1600, 900, img -> {
-            view.setImage(img);
-            double w = img.getWidth(), h = img.getHeight();
-            if (w / h > 16.0 / 9) w = h * 16.0 / 9; else h = w * 9.0 / 16;
-            view.setViewport(new Rectangle2D((img.getWidth() - w) / 2, (img.getHeight() - h) / 2, w, h));
-        });
-    }
-    private void restartCarousel() {
-        if (carousel != null) { carousel.playFromStart(); syncCarousel(); }
-    }
+
+    private static boolean hasArtwork(String url) { return url != null && !url.isBlank(); }
     private void categoryPage(VBox content, String title, String mode, String filter, ScrollPane scrolling) {
         if (carousel != null) { carousel.stop(); carousel = null; }
-        VBox results = new VBox(20); TilePane grid = new TilePane(20, 24);
+        VBox results = new VBox(20); TilePane grid = posterGrid(20, 24);
         Button more = button(t("Carica altri", "Load more"), "quiet", () -> {});
         more.setMaxWidth(Double.MAX_VALUE); more.setMinHeight(58); more.getStyleClass().add("load-more");
         int[] page = {1}; Set<Integer> shown = new HashSet<>();
@@ -1385,7 +2654,12 @@ public class App extends Application {
             more.setDisable(true); more.setText(t("Caricamento…", "Loading…"));
             async(() -> api.browse(mode, filter, page[0], 30), results, found -> {
                 int added = 0;
-                for (Anime anime : found) if (shown.add(anime.id)) { Node card = animeCard(anime); grid.getChildren().add(card); entrance(card, added++); }
+                for (Anime anime : found) if (shown.add(anime.id)) {
+                    Node card = animeCard(anime);
+                    grid.getChildren().add(card);
+                    if (page[0] == 1 && added < 8) entrance(card, added);
+                    added++;
+                }
                 page[0]++; more.setDisable(false); more.setText(t("Carica altri", "Load more"));
                 if (added == 0) { more.setVisible(false); more.setManaged(false); }
                 if (shown.isEmpty()) results.getChildren().add(label(t("Nessun anime disponibile.", "No anime available."), "muted"));
@@ -1637,6 +2911,7 @@ public class App extends Application {
     }
 
     private StackPane modal(String title, VBox body, double width, boolean dismissible) {
+        hideCardPopup();
         VBox surface = new VBox(20); surface.getStyleClass().add("modal-surface");
         surface.setMaxWidth(width); surface.setMaxHeight(Region.USE_PREF_SIZE);
         surface.prefWidthProperty().bind(root.widthProperty().subtract(64).map(w -> Math.min(width, w.doubleValue())));
@@ -1695,7 +2970,8 @@ public class App extends Application {
     }
     private void syncCarousel() {
         if (carousel == null) return;
-        if (!closed && route == Route.DISCOVER && modals.isEmpty() && window.isShowing() && !window.isIconified() && window.isFocused())
+        if (!closed && route == Route.DISCOVER && carouselInView && modals.isEmpty() && window.isShowing() && !window.isIconified() && window.isFocused()
+            && (carouselHoverTarget == null || !carouselHoverTarget.isInteracting()))
             carousel.play();
         else carousel.pause();
     }
@@ -1715,6 +2991,7 @@ public class App extends Application {
         workers.shutdownNow();
         if (api != null) api.close();
         if (covers != null) covers.close();
+        if (animeNews != null) animeNews.close();
         detailCache.clear();
         try { if (instanceLock != null && instanceLock.isValid()) instanceLock.release(); } catch (IOException ignored) { }
         try { if (lockChannel != null) lockChannel.close(); } catch (IOException ignored) { }
