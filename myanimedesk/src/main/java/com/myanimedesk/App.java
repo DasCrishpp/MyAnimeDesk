@@ -168,6 +168,8 @@ public class App extends Application {
     private final Deque<StackPane> modals = new ArrayDeque<>();
     private final Deque<Anime> detailHistory = new ArrayDeque<>();
     private StackPane detailModal;
+    private AnimeDetailMotion detailMotion;
+    private Node detailReturnFocus;
     private VBox detailBody;
     private Anime currentDetail;
     private int detailGeneration;
@@ -585,7 +587,7 @@ public class App extends Application {
             Button open = button(watching.isEmpty() ? t("Scopri anime", "Explore anime") : t("Apri scheda", "Open details"),
                 "dashboard-spotlight-action", () -> {
                     if (index < 0) navigate(Route.DISCOVER);
-                    else showDetails(watching.get(index), false);
+                    else showDetails(watching.get(index), false, poster);
                 });
             caption = new VBox(12);
             caption.getStyleClass().add("dashboard-spotlight-caption");
@@ -733,10 +735,6 @@ public class App extends Application {
             view.setViewport(new Rectangle2D((image.getWidth() - cropWidth) / 2,
                 (image.getHeight() - cropHeight) * verticalPosition, cropWidth, cropHeight));
         }
-    }
-    private VBox stat(String value, String caption) {
-        VBox stat = panel(label(value, "stat-value"), label(caption, "muted"));
-        HBox.setHgrow(stat, Priority.ALWAYS); stat.setMaxWidth(Double.MAX_VALUE); return stat;
     }
     private VBox empty(String title, String body, String action, Runnable run) {
         VBox empty = panel(label("✦", "empty-icon"), label(title, "section-title"), label(body, "muted"), button(action, "primary", run));
@@ -933,8 +931,8 @@ public class App extends Application {
             e.consume();
         });
         heart.addEventHandler(MouseEvent.MOUSE_CLICKED, MouseEvent::consume);
-        card.setOnMouseClicked(e -> { if (e.getButton() == MouseButton.PRIMARY) { hideCardPopup(); showDetails(anime, false); } });
-        card.setOnKeyPressed(e -> { if (e.getCode() == KeyCode.ENTER) { showDetails(anime, false); e.consume(); } });
+        card.setOnMouseClicked(e -> { if (e.getButton() == MouseButton.PRIMARY) { hideCardPopup(); showDetails(anime, false, cover); } });
+        card.setOnKeyPressed(e -> { if (e.getCode() == KeyCode.ENTER) { showDetails(anime, false, cover); e.consume(); } });
         card.setOnContextMenuRequested(event -> {
             showCardContext(card, anime, event.getScreenX(), event.getScreenY());
             event.consume();
@@ -1172,9 +1170,27 @@ public class App extends Application {
 
 
     private void showDetails(Anime anime, boolean related) {
-        if (detailModal == null) {
-            detailBody = new VBox(16);
-            detailModal = modal(t("Scheda anime", "Anime details"), detailBody, 1100, true);
+        showDetails(anime, related, null);
+    }
+
+    private void showDetails(Anime anime, boolean related, StackPane cover) {
+        boolean opening = detailModal == null;
+        if (opening) {
+            detailReturnFocus = cover != null && cover.getParent() != null && cover.getParent().isFocusTraversable()
+                ? cover.getParent() : root.getScene().getFocusOwner();
+            detailBody = new VBox();
+            detailModal = modal(t("Scheda anime", "Anime details"), detailBody, 1120, true, false);
+            detailModal.getStyleClass().add("anime-detail-modal");
+            detailModal.getStylesheets().add(Objects.requireNonNull(App.class.getResource("anime-detail.css")).toExternalForm());
+            StackPane overlay = detailModal;
+            overlay.setPickOnBounds(true);
+            overlay.setOnMouseClicked(event -> {
+                if (event.getButton() == MouseButton.PRIMARY && event.getTarget() == overlay && modals.peek() == overlay) {
+                    event.consume();
+                    closeModal(overlay);
+                }
+            });
+            detailMotion = new AnimeDetailMotion(detailModal, cover);
         } else if (related && currentDetail != null) detailHistory.push(currentDetail);
         else if (!related) detailHistory.clear();
         currentDetail = library.findById(anime.id);
@@ -1182,8 +1198,7 @@ public class App extends Application {
         int generation = ++detailGeneration;
         renderDetail(false);
         if (!detailCache.containsKey(anime.id)) {
-            Label loading = label(t("Carico trama, cast e collegamenti…", "Loading synopsis, cast and related titles…"), "muted");
-            detailBody.getChildren().add(0, loading);
+            detailNotice(label(t("Carico i dettagli…", "Loading anime details…"), "muted"));
             Anime requested = currentDetail;
             async(() -> api.getAnimeDetails(requested), detailBody, full -> {
                 if (generation != detailGeneration) return;
@@ -1192,15 +1207,25 @@ public class App extends Application {
                 Anime saved = library.findById(full.id);
                 if (saved != null) { copyMetadata(full, saved); currentDetail = saved; }
                 else currentDetail = full;
-                renderDetail(false);
+                renderDetail(true);
             }, error -> { if (generation == detailGeneration) detailFailure(); });
+        }
+        if (opening) {
+            root.applyCss();
+            root.layout();
+            detailModal.lookup(".modal-close").setId("detail-close");
+            detailMotion.open();
         }
     }
     private void detailFailure() {
-        renderDetail(false);
-        detailBody.getChildren().add(0, row(label(t("Informazioni online non disponibili. La tua lista funziona anche offline.",
-            "Online details are unavailable. Your library still works offline."), "muted"),
-            button(t("Riprova", "Retry"), "quiet", () -> showDetails(currentDetail, false))));
+        renderDetail(true);
+        detailNotice(label(t("Informazioni online non disponibili.", "Online details are unavailable."), "muted"),
+            button(t("Riprova", "Retry"), "quiet", () -> showDetails(currentDetail, false)));
+    }
+    private void detailNotice(Node... content) {
+        HBox notice = row(content);
+        notice.getStyleClass().add("anime-detail-notice");
+        detailBody.getChildren().add(0, notice);
     }
     private void copyMetadata(Anime from, Anime to) {
         to.malId = from.malId; to.kitsuId = from.kitsuId; to.provider = from.provider;
@@ -1216,32 +1241,58 @@ public class App extends Application {
         if (detailModal == null || currentDetail == null) return;
         Anime saved = library.findById(currentDetail.id);
         if (saved != null) currentDetail = saved;
-        renderDetail(false);
+        renderDetail(true);
     }
-    private void renderDetail(boolean ignored) {
+    private void renderDetail(boolean preserveScroll) {
         Anime anime = currentDetail;
-        detailBody.getChildren().clear();
+        ScrollPane previous = (ScrollPane) detailBody.lookup("#detail-scroll");
+        double position = preserveScroll && previous != null ? previous.getVvalue() : 0;
+        VBox content = new VBox(18);
+        content.getStyleClass().add("anime-detail-content");
         if (!detailHistory.isEmpty()) {
-            detailBody.getChildren().add(button("← " + t("Torna a ", "Back to ") + detailHistory.peek().title, "quiet", () -> {
+            Button backButton = button("← " + t("Torna a ", "Back to ") + detailHistory.peek().title, "anime-detail-source", () -> {
                 Anime back = detailHistory.pop();
                 Deque<Anime> keep = new ArrayDeque<>(detailHistory);
                 showDetails(back, false); detailHistory.addAll(keep); renderDetail(false);
-            }));
+            });
+            backButton.setId("detail-back");
+            backButton.setMaxWidth(480);
+            content.getChildren().add(backButton);
         }
         Anime saved = library.findById(anime.id);
-        VBox left = new VBox(14, image(covers, anime.coverImage, 220, 310, 22));
-        left.setPrefWidth(220); left.setMaxWidth(220); left.setMinWidth(220);
-        Button favourite = button(saved != null && saved.favorite ? t("♥ Nei preferiti", "♥ Favourited") : t("♡ Preferiti", "♡ Favourite"), "quiet", () -> {
+        HBox columns = new HBox(18, detailOverview(anime, saved), detailLibrary(anime, saved));
+        columns.getStyleClass().add("anime-detail-bottom");
+        columns.setAlignment(Pos.TOP_LEFT);
+        content.getChildren().addAll(detailHero(anime), columns);
+        ScrollPane scrolling = scroll(content);
+        scrolling.getStyleClass().add("anime-detail-scroll");
+        scrolling.setId("detail-scroll");
+        detailBody.getChildren().setAll(scrolling);
+        scrolling.setVvalue(position);
+    }
+
+    private VBox detailLibrary(Anime anime, Anime saved) {
+        VBox libraryPanel = new VBox(11, label(t("La mia lista", "My library"), "anime-detail-heading"));
+        libraryPanel.getStyleClass().add("anime-detail-library");
+        libraryPanel.setPrefWidth(270);
+        libraryPanel.setMinWidth(250);
+        libraryPanel.setMaxWidth(270);
+        libraryPanel.setMaxHeight(Region.USE_PREF_SIZE);
+        Button favourite = button(saved != null && saved.favorite ? t("♥  Nei preferiti", "♥  Favourited")
+            : t("♡  Aggiungi ai preferiti", "♡  Add to favourites"), "anime-detail-favorite", () -> {
             if (mutate(() -> { ensureSaved(anime); library.toggleFavorite(library.findById(anime.id)); })) { afterLibraryChange(); refreshDetail(); }
         });
+        favourite.setId("detail-favourite");
+        favourite.pseudoClassStateChanged(PseudoClass.getPseudoClass("selected"), saved != null && saved.favorite);
         favourite.setMaxWidth(Double.MAX_VALUE);
-        left.getChildren().add(favourite);
         ComboBox<Anime.Status> state = combo(List.of(Anime.Status.values()), saved == null ? null : saved.status, this::status);
         state.setCellFactory(list -> statusCell()); state.setButtonCell(statusCell());
         state.getStyleClass().add("status-selector");
         state.setPromptText(t("+ Aggiungi alla lista", "+ Add to library")); state.setId("detail-status");
         state.setOnAction(e -> { if (state.getValue() != null) changeStatus(anime, state.getValue()); });
-        left.getChildren().addAll(label(t("Stato nella tua lista", "Your library status"), "tiny"), state);
+        Label stateLabel = label(t("Stato di visione", "Watch status"), "anime-detail-control-label");
+        stateLabel.setLabelFor(state);
+        libraryPanel.getChildren().addAll(new VBox(5, stateLabel, state), favourite);
         if (saved != null) {
             Spinner<Integer> views = new Spinner<>(0, AnimeListManager.MAX_VIEWS, saved.viewCount());
             views.setEditable(false); views.setId("view-count"); views.setMaxWidth(Double.MAX_VALUE);
@@ -1261,81 +1312,160 @@ public class App extends Application {
                 boolean ask = saved.viewCount() == 0 && count > 0 && !saved.rated();
                 if (mutate(() -> library.setViewCount(anime.id, count))) {
                     hours.setText(number(saved.watchedHours()) + t(" ore guardate", " hours watched"));
-                    afterLibraryChange(); if (ask) ratingDialog(library.findById(anime.id), true);
+                    afterLibraryChange();
+                    if ((oldCount == 0) != (count == 0)) refreshDetail();
+                    if (ask) ratingDialog(library.findById(anime.id), true);
                 } else {
                     restoreCount.accept(oldCount);
                 }
             });
-            left.getChildren().addAll(new Separator(), label(t("Visioni complete", "Completed viewings"), "tiny"),
-                views, label(t("Salvataggio automatico", "Saved automatically"), "tiny"), hours);
-            Button organise = button(t("▤ Organizza in cartelle", "▤ Organise in folders"), "quiet", () -> folderMembership(anime));
+            Label viewsLabel = label(t("Visioni complete", "Completed viewings"), "anime-detail-control-label");
+            viewsLabel.setLabelFor(views);
+            libraryPanel.getChildren().add(new VBox(5, viewsLabel, views, hours));
+            if (saved.viewCount() > 0) {
+                Button rating = button(saved.rated() ? t("Modifica voti", "Edit ratings") : t("Vota questo anime", "Rate this anime"),
+                    "anime-detail-rating-action", () -> ratingDialog(library.findById(anime.id), false));
+                rating.setId("detail-rating");
+                rating.setMaxWidth(Double.MAX_VALUE);
+                HBox summary = row(label(t("Il tuo voto", "Your rating"), "anime-detail-control-label"), spacer(),
+                    label(saved.rated() ? number(saved.overall()) : "—", "anime-detail-rating-value"));
+                libraryPanel.getChildren().add(new VBox(5, summary, rating));
+            }
+            Button organise = button(t("Organizza cartelle", "Organise folders"), "anime-detail-source", () -> folderMembership(anime));
+            organise.setId("detail-folders");
             organise.setMaxWidth(Double.MAX_VALUE);
             String folders = saved.folderIds.stream().map(library.folders()::get).filter(Objects::nonNull)
                 .reduce((a,b) -> a + "\n" + b).orElse(t("Nessuna cartella", "No folders"));
-            VBox folderStatus = new VBox(4, label(t("NELLE CARTELLE", "IN FOLDERS"), "eyebrow"), label(folders, "folder-names"));
-            folderStatus.getStyleClass().add("folder-membership");
-            left.getChildren().addAll(organise, folderStatus);
-            left.getChildren().add(button(t("Rimuovi dalla lista", "Remove from library"), "danger", () ->
+            VBox folderStatus = new VBox(7, label(t("Cartelle", "Folders"), "anime-detail-control-label"), label(folders, "folder-names"), organise);
+            folderStatus.getStyleClass().add("anime-detail-folders");
+            libraryPanel.getChildren().add(folderStatus);
+            Button remove = button(t("Rimuovi dalla lista", "Remove from library"), "anime-detail-remove", () ->
                 confirm(t("Rimuovere questo anime?", "Remove this anime?"),
                     t("Verranno rimossi anche le sue visioni, le cartelle associate e il voto.", "Its viewings, folder memberships and rating will also be removed."), () -> {
                         if (mutate(() -> library.remove(anime.id))) { closeModal(detailModal); afterLibraryChange(); }
-                    })));
+                    }));
+            remove.setId("detail-remove");
+            remove.setMaxWidth(Double.MAX_VALUE);
+            libraryPanel.getChildren().add(remove);
         }
-        VBox right = new VBox(18, label(anime.title, "detail-title"),
-            label(meta(anime.format) + "  ·  " + meta(anime.year) + "  ·  " + meta(anime.season) + "  ·  " + meta(anime.airingStatus), "subtitle"));
-        right.setMinWidth(0); HBox.setHgrow(right, Priority.ALWAYS);
+        return libraryPanel;
+    }
+    private StackPane detailHero(Anime anime) {
+        Label title = label(meta(anime.title), "anime-detail-title");
+        title.setId("anime-detail-title");
+        if (title.getText().length() >= 95) title.getStyleClass().add("long-title");
+        Label metadata = label(meta(anime.format) + "  ·  " + meta(anime.year) + "  ·  " + meta(anime.season)
+            + "  ·  " + meta(anime.airingStatus), "anime-detail-meta");
         FlowPane tags = new FlowPane(7, 7);
+        tags.getStyleClass().add("anime-detail-genres");
         if (anime.genres != null) for (String value : anime.genres) tags.getChildren().add(label(genre(value), "tag"));
-        right.getChildren().add(tags);
-        String scoreSource = "JIKAN".equalsIgnoreCase(anime.provider) ? t("media MyAnimeList", "MyAnimeList average")
-            : "KITSU".equalsIgnoreCase(anime.provider) ? t("media Kitsu", "Kitsu average") : t("media AniList", "AniList average");
-        right.getChildren().add(row(stat(anime.episodes > 0 ? String.valueOf(anime.episodes) : "—", t("episodi", "episodes")),
-            stat(anime.duration > 0 ? anime.duration + " min" : "—", t("per episodio", "per episode")),
-            stat(anime.averageScore > 0 ? anime.averageScore + "%" : "—", scoreSource)));
-        right.getChildren().add(label("Studio  ·  " + meta(anime.studio), "muted"));
-        HBox external = row();
         String trailer = trailerUrl(anime);
-        Button trailerButton = button("▶ " + t("Guarda il trailer", "Watch trailer"), "primary", () -> showTrailer(anime));
+        Button trailerButton = button(trailer == null ? t("Trailer non disponibile", "No trailer available")
+            : "▶  " + t("Guarda il trailer", "Watch trailer"), "anime-detail-trailer", () -> showTrailer(anime));
+        trailerButton.setId("detail-trailer");
         trailerButton.setDisable(trailer == null);
         trailerButton.setTooltip(new Tooltip(trailer == null ? t("Trailer non disponibile", "No trailer available")
             : t("Riproduci direttamente nell'app", "Play directly in the app")));
         boolean fromMal = "JIKAN".equalsIgnoreCase(anime.provider), fromKitsu = "KITSU".equalsIgnoreCase(anime.provider);
         String sourceButton = fromMal ? t("Apri su MyAnimeList", "View on MyAnimeList")
             : fromKitsu ? t("Apri su Kitsu", "View on Kitsu") : t("Apri su AniList", "View on AniList");
-        external.getChildren().addAll(trailerButton, button(sourceButton,
-            "quiet", () -> openUrl(animePageUrl(anime))));
-        right.getChildren().add(external);
-        right.getChildren().add(label(t("Trama", "Synopsis"), "section-title"));
+        Button source = button(sourceButton + "  ↗", "anime-detail-source", () -> openUrl(animePageUrl(anime)));
+        source.setId("detail-source");
+        HBox external = row(trailerButton, source);
+        external.getStyleClass().add("anime-detail-actions");
+
+        VBox summary = new VBox(11, title, metadata);
+        if (!tags.getChildren().isEmpty()) summary.getChildren().add(tags);
+        summary.getChildren().add(external);
+        summary.setMinWidth(0);
+        summary.getStyleClass().add("anime-detail-summary");
+        HBox.setHgrow(summary, Priority.ALWAYS);
+        StackPane cover = image(covers, anime.coverImage, 160, 224, 21);
+        cover.getStyleClass().add("anime-detail-cover");
+        HBox intro = new HBox(25, cover, summary);
+        intro.getStyleClass().add("anime-detail-intro");
+        intro.setAlignment(Pos.CENTER_LEFT);
+
+        ImageView artwork = new ImageView();
+        artwork.setManaged(false);
+        artwork.setMouseTransparent(true);
+        artwork.setSmooth(true);
+        Region shade = new Region();
+        shade.getStyleClass().add("anime-detail-hero-shade");
+        shade.setMouseTransparent(true);
+        StackPane hero = new StackPane(artwork, shade, intro);
+        hero.getStyleClass().add("anime-detail-hero");
+        Rectangle clip = new Rectangle();
+        clip.setArcWidth(38); clip.setArcHeight(38);
+        clip.widthProperty().bind(hero.widthProperty()); clip.heightProperty().bind(hero.heightProperty());
+        hero.setClip(clip);
+        artwork.fitWidthProperty().bind(hero.widthProperty());
+        artwork.fitHeightProperty().bind(hero.heightProperty());
+        artwork.fitWidthProperty().addListener((obs, before, after) -> cropDetailArtwork(artwork));
+        artwork.fitHeightProperty().addListener((obs, before, after) -> cropDetailArtwork(artwork));
+        covers.load(anime.coverImage, 320, 448, fallback -> {
+            if (artwork.getImage() == null) {
+                artwork.setImage(fallback);
+                artwork.setOpacity(.37);
+                cropDetailArtwork(artwork);
+            }
+        });
+        if (hasArtwork(anime.bannerImage) && !Objects.equals(anime.coverImage, anime.bannerImage)) {
+            covers.load(anime.bannerImage, 1280, 720, banner -> {
+                artwork.setImage(banner);
+                artwork.setOpacity(banner.getWidth() >= banner.getHeight() * 1.3 ? .82 : .37);
+                cropDetailArtwork(artwork);
+            });
+        }
+        return hero;
+    }
+
+    private void cropDetailArtwork(ImageView view) {
+        Image image = view.getImage();
+        if (image == null || view.getFitWidth() <= 0 || view.getFitHeight() <= 0) return;
+        double ratio = view.getFitWidth() / view.getFitHeight();
+        double width = Math.min(image.getWidth(), image.getHeight() * ratio);
+        double height = Math.min(image.getHeight(), image.getWidth() / ratio);
+        double focus = image.getHeight() > image.getWidth() ? .27 : .5;
+        view.setViewport(new Rectangle2D((image.getWidth() - width) / 2, (image.getHeight() - height) * focus, width, height));
+    }
+
+    private VBox detailOverview(Anime anime, Anime saved) {
+        VBox overview = new VBox(13);
+        overview.setMinWidth(0);
+        HBox.setHgrow(overview, Priority.ALWAYS);
+        String scoreSource = "JIKAN".equalsIgnoreCase(anime.provider) ? "MyAnimeList"
+            : "KITSU".equalsIgnoreCase(anime.provider) ? "Kitsu" : "AniList";
+        HBox facts = row(detailFact(anime.episodes > 0 ? String.valueOf(anime.episodes) : "—", t("Episodi", "Episodes")),
+            detailFact(anime.duration > 0 ? anime.duration + " min" : "—", t("Per episodio", "Per episode")),
+            detailFact(anime.averageScore > 0 ? anime.averageScore + "%" : "—", t("Media ", "Average on ") + scoreSource),
+            detailFact(meta(anime.studio), "Studio"));
+        facts.getStyleClass().add("anime-detail-facts");
+        overview.getChildren().add(facts);
         String synopsis = Texts.synopsis(anime.description);
         Label plot = label(synopsis.isEmpty() ? t("Trama non disponibile.", "No synopsis available.") : en() ? synopsis : "Traduco la trama…", "synopsis");
-        VBox plotBox = new VBox(8, plot); right.getChildren().add(plotBox);
+        VBox plotText = new VBox(8, plot);
+        VBox plotBox = new VBox(10, label(t("Trama", "Synopsis"), "anime-detail-heading"), plotText);
+        plotBox.getStyleClass().add("anime-detail-plot");
+        plotBox.setId("detail-plot");
+        overview.getChildren().add(plotBox);
         if (!en() && !synopsis.isEmpty()) {
             Runnable translate = () -> async(() -> SynopsisTranslator.italian(synopsis, profile), plot, plot::setText, failure -> {
                 plot.setText("Traduzione momentaneamente non disponibile.");
                 Button original = button("Mostra originale inglese", "quiet", () -> plot.setText(synopsis));
-                plotBox.getChildren().setAll(plot, original);
+                plotText.getChildren().setAll(plot, original);
             });
             Platform.runLater(translate);
         }
-        right.getChildren().add(label(t("Dati da AniList. Trama tradotta automaticamente in italiano.",
-            "Catalogue data provided by AniList."), "tiny"));
-        if (saved != null && saved.viewCount() > 0) {
-            right.getChildren().add(row(label(t("Il tuo voto", "Your rating"), "section-title"), spacer(),
-                button(saved.rated() ? t("Modifica voti", "Edit ratings") : t("Vota questo anime", "Rate this anime"), "primary", () -> ratingDialog(library.findById(anime.id), false))));
-            if (saved.rated()) right.getChildren().add(ratingBreakdown(saved));
-            else right.getChildren().add(label(t("Senza voto: questo anime non compare in classifica.", "Not rated: this anime is not in your ranking."), "muted"));
-        }
         VBox cast = new VBox(14);
-        TitledPane castSection = new TitledPane(t("Personaggi e doppiatori giapponesi", "Characters & Japanese voice cast"), cast);
-        castSection.setExpanded(false);
+        TitledPane castSection = detailDisclosure(t("Personaggi e doppiatori", "Characters & voice cast"), "detail-cast", cast);
         boolean[] castBuilt = {false};
         castSection.expandedProperty().addListener((obs, old, expanded) -> {
             if (expanded && !castBuilt[0]) { castBuilt[0] = true; renderCast(anime, cast); }
         });
-        right.getChildren().add(castSection);
+        overview.getChildren().add(castSection);
         VBox related = new VBox(10);
-        TitledPane relatedSection = new TitledPane(t("Stagioni", "Seasons"), related);
-        relatedSection.setExpanded(false);
+        TitledPane relatedSection = detailDisclosure(t("Stagioni", "Seasons"), "detail-seasons", related);
         boolean[] relatedBuilt = {false};
         relatedSection.expandedProperty().addListener((obs, old, expanded) -> {
             if (expanded && !relatedBuilt[0]) {
@@ -1351,15 +1481,41 @@ public class App extends Application {
                             new VBox(5, label(season.title, "body"), label(meta(season.year) + "  ·  " + meta(season.season), "tiny")),
                             spacer(), label(season.id == anime.id ? t("Attuale", "Current") : "→", "accent-text"));
                         entry.getStyleClass().addAll("list-row", "season-entry");
-                        if (season.id != anime.id) entry.setOnMouseClicked(e -> showDetails(season, true));
+                        if (season.id != anime.id) {
+                            entry.setFocusTraversable(true);
+                            entry.setAccessibleRole(AccessibleRole.BUTTON);
+                            entry.setAccessibleText(season.title);
+                            entry.setOnMouseClicked(e -> { if (e.getButton() == MouseButton.PRIMARY) showDetails(season, true); });
+                            entry.setOnKeyPressed(e -> {
+                                if (e.getCode() == KeyCode.ENTER || e.getCode() == KeyCode.SPACE) { showDetails(season, true); e.consume(); }
+                            });
+                        }
                         related.getChildren().add(entry);
                     }
                 }, error -> related.getChildren().setAll(label(t("Stagioni non disponibili.", "Seasons unavailable."), "muted")));
             }
         });
-        right.getChildren().add(relatedSection);
-        HBox columns = new HBox(28, left, right); columns.setAlignment(Pos.TOP_LEFT);
-        detailBody.getChildren().add(scroll(columns));
+        overview.getChildren().add(relatedSection);
+        if (saved != null && saved.viewCount() > 0 && saved.rated()) overview.getChildren().add(detailDisclosure(
+            t("Dettaglio dei tuoi voti", "Your rating breakdown"), "detail-rating-breakdown", ratingBreakdown(saved)));
+        return overview;
+    }
+
+    private VBox detailFact(String value, String caption) {
+        VBox fact = new VBox(3, label(caption, "anime-detail-fact-label"), label(value, "anime-detail-fact-value"));
+        fact.getStyleClass().add("anime-detail-fact");
+        fact.setMinWidth(0);
+        fact.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(fact, Priority.ALWAYS);
+        return fact;
+    }
+
+    private TitledPane detailDisclosure(String title, String id, Node content) {
+        TitledPane pane = new TitledPane(title, content);
+        pane.setId(id);
+        pane.getStyleClass().add("anime-detail-disclosure");
+        pane.setExpanded(false);
+        return pane;
     }
     static String trailerUrl(Anime anime) {
         String id = anime.trailerId;
@@ -1460,72 +1616,144 @@ public class App extends Application {
         return box;
     }
     private void ratingDialog(Anime anime, boolean optional) {
-        Label overall = label("", "rating-overall-value");
-        VBox summary = new VBox(3, label("OVERALL", "eyebrow"), overall,
-            label(t("La media si aggiorna mentre scegli i voti", "The average updates while you score"), "tiny"));
-        summary.getStyleClass().add("rating-summary");
-        TilePane fields = new TilePane(14, 14); fields.setPrefColumns(2); fields.setPrefTileWidth(440);
-        Map<RatingCategory, Slider> controls = new EnumMap<>(RatingCategory.class);
-        Map<RatingCategory, Button> special = new EnumMap<>(RatingCategory.class);
-        Map<RatingCategory, Label> displayed = new EnumMap<>(RatingCategory.class);
-        Runnable[] update = new Runnable[1];
+        Label overall = label("", "rating-editor-average");
+        overall.setId("rating-overall");
+        Label specialStatus = label("", "rating-editor-special-state");
+        Label animeTitle = label(meta(anime.title), "rating-editor-title");
+        animeTitle.setWrapText(false);
+        animeTitle.setMinWidth(0);
+        animeTitle.setTooltip(new Tooltip(animeTitle.getText()));
+        VBox heading = new VBox(8, animeTitle, label(t("Voti da 0 a 10. Puoi assegnare un solo 12.",
+            "Score each category from 0 to 10. You can give one score of 12."), "rating-editor-hint"));
+        heading.setMinWidth(0);
+        VBox average = new VBox(0, label(t("Media", "Average"), "rating-editor-average-label"), overall);
+        average.getStyleClass().add("rating-editor-readout");
+        average.setAlignment(Pos.CENTER);
+        HBox summary = row(heading, spacer(), specialStatus, average);
+        summary.getStyleClass().add("rating-editor-summary");
+
+        GridPane fields = new GridPane();
+        fields.getStyleClass().add("rating-editor-grid");
+        fields.setHgap(11); fields.setVgap(9);
+        for (int i = 0; i < 2; i++) {
+            ColumnConstraints column = new ColumnConstraints();
+            column.setPercentWidth(50);
+            fields.getColumnConstraints().add(column);
+        }
+        Map<RatingCategory, RatingInput> inputs = new EnumMap<>(RatingCategory.class);
+        ToggleGroup specials = new ToggleGroup();
+        PseudoClass bonusActive = PseudoClass.getPseudoClass("bonus-active");
         for (RatingCategory category : RatingCategory.values()) {
+            String caption = en() ? category.en : category.it;
             Integer savedScore = anime.ratings.get(category.name());
             Slider score = new Slider(0, 10, savedScore == null ? 5 : Math.min(10, savedScore));
             score.setBlockIncrement(1); score.setMajorTickUnit(1); score.setMinorTickCount(0); score.setSnapToTicks(true);
-            score.setShowTickMarks(true); score.setId("rating-" + category.name()); score.getStyleClass().add("rating-slider");
-            Label value = label(savedScore != null && savedScore == 12 ? "12" : Integer.toString((int)Math.round(score.getValue())), "rating-value");
-            Label help = label("?", "help"); help.setTooltip(new Tooltip(en() ? category.helpEn : category.helpIt));
-            Button bonus = button(t("Voto speciale 12", "Special score 12"), "rating-special", () -> {});
-            bonus.setMaxWidth(Double.MAX_VALUE);
-            VBox card = new VBox(10, row(label(en() ? category.en : category.it, "rating-category"), help, spacer(), value), score, bonus);
-            card.getStyleClass().add("rating-card"); fields.getChildren().add(card);
-            controls.put(category, score); special.put(category, bonus); displayed.put(category, value);
-            if (savedScore != null && savedScore == 12) { bonus.getStyleClass().add("rating-special-selected"); score.setDisable(true); }
-            score.valueProperty().addListener((obs, old, selected) -> {
-                value.setText(Integer.toString((int)Math.round(selected.doubleValue()))); if (update[0] != null) update[0].run();
-            });
-            bonus.setOnAction(e -> {
-                boolean selecting = !bonus.getStyleClass().contains("rating-special-selected");
-                special.forEach((otherCategory, other) -> {
-                    other.getStyleClass().remove("rating-special-selected"); controls.get(otherCategory).setDisable(false);
-                    displayed.get(otherCategory).setText(Integer.toString((int)Math.round(controls.get(otherCategory).getValue())));
-                });
-                if (selecting) { bonus.getStyleClass().add("rating-special-selected"); score.setDisable(true); value.setText("12"); }
-                else value.setText(Integer.toString((int)Math.round(score.getValue())));
-                update[0].run();
-            });
+            score.setShowTickMarks(true);
+            score.setId("rating-" + category.name());
+            score.getStyleClass().add("rating-editor-slider");
+            score.setAccessibleText(caption);
+            score.setMinWidth(0);
+            HBox.setHgrow(score, Priority.ALWAYS);
+            score.styleProperty().bind(Bindings.createStringBinding(() -> {
+                int percent = (int) Math.round(score.getValue() * 10);
+                return "-score-track: linear-gradient(to right, #bb92ff " + percent + "%, #3b2a53 " + percent + "%);";
+            }, score.valueProperty()));
+
+            ToggleButton bonus = new ToggleButton("12");
+            bonus.getStyleClass().add("rating-editor-bonus");
+            bonus.setId("rating-bonus-" + category.name());
+            bonus.setAccessibleText(t("Voto speciale 12 per ", "Special score 12 for ") + caption);
+            bonus.setTooltip(new Tooltip(t("Voto speciale 12", "Special score 12")));
+            bonus.setUserData(category);
+            bonus.setToggleGroup(specials);
+            bonus.setSelected(savedScore != null && savedScore == 12);
+            score.disableProperty().bind(bonus.selectedProperty());
+
+            RatingInput input = new RatingInput(score, bonus);
+            inputs.put(category, input);
+            Label value = label("", "rating-editor-value");
+            value.textProperty().bind(Bindings.createStringBinding(() -> Integer.toString(input.value()),
+                score.valueProperty(), bonus.selectedProperty()));
+            HBox range = row(label("0", "rating-editor-endpoint"), score, label("10", "rating-editor-endpoint"), bonus);
+            range.getStyleClass().add("rating-editor-range");
+            VBox card = new VBox(4, row(label(caption, "rating-editor-category"), ratingHelp(category, caption), spacer(), value), range);
+            card.getStyleClass().add("rating-editor-criterion");
+            card.pseudoClassStateChanged(bonusActive, bonus.isSelected());
+            bonus.selectedProperty().addListener((obs, before, active) -> card.pseudoClassStateChanged(bonusActive, active));
+            fields.add(card, category.ordinal() % 2, category.ordinal() / 2);
         }
         Label validation = label("", "error");
-        ScrollPane scoreScroll = scroll(fields); scoreScroll.setPrefViewportHeight(620);
-        VBox body = new VBox(16, summary,
-            label(t("Sposta i cursori da 0 a 10. Un solo criterio può ricevere il voto speciale 12.",
-                "Move the sliders from 0 to 10. Only one category can receive the special score of 12."), "muted"),
-            scoreScroll, validation);
-        StackPane dialog = modal(t("La tua valutazione · ", "Your rating · ") + anime.title, body, 1120, true);
-        Button save = button(t("Salva in classifica", "Save to ranking"), "primary", () -> {
-            Map<String,Integer> scores = new LinkedHashMap<>(); controls.forEach((key, slider) -> scores.put(key.name(),
-                special.get(key).getStyleClass().contains("rating-special-selected") ? 12 : (int)Math.round(slider.getValue())));
+        validation.visibleProperty().bind(validation.textProperty().isNotEmpty());
+        validation.managedProperty().bind(validation.visibleProperty());
+        ScrollPane scoreScroll = scroll(fields);
+        scoreScroll.setId("rating-scroll");
+        scoreScroll.getStyleClass().add("rating-editor-scroll");
+        scoreScroll.setPrefViewportHeight(438);
+        VBox body = new VBox(12, summary, scoreScroll, validation);
+        StackPane dialog = modal(t("La tua valutazione", "Your rating"), body, 1120, true);
+        dialog.setId("rating-dialog");
+        dialog.getStyleClass().add("rating-editor-modal");
+        dialog.getStylesheets().add(Objects.requireNonNull(App.class.getResource("rating-dialog.css")).toExternalForm());
+        Region surface = (Region) dialog.getChildren().getFirst();
+        surface.maxHeightProperty().bind(root.heightProperty().subtract(60).map(height -> Math.min(714, height.doubleValue())));
+        Button save = button(t("Salva in classifica", "Save to ranking"), "rating-editor-save", () -> {
+            Map<String, Integer> scores = new LinkedHashMap<>();
+            inputs.forEach((category, input) -> scores.put(category.name(), input.value()));
             try { RatingCategory.validate(scores); }
             catch (IllegalArgumentException e) { validation.setText(t("Completa tutti i voti: 0–10 e al massimo un 12.", "Complete all scores: 0–10 and at most one 12.")); return; }
             if (mutate(() -> library.setRating(anime.id, scores))) { closeModal(dialog); afterLibraryChange(); refreshDetail(); }
         });
         save.setId("save-rating");
         HBox actions = row();
-        if (anime.rated()) actions.getChildren().add(button(t("Rimuovi voto", "Remove rating"), "danger", () ->
-            confirm(t("Rimuovere il voto?", "Remove this rating?"), t("L'anime uscirà dalla classifica. Le visioni non cambieranno.",
+        actions.getStyleClass().add("rating-editor-actions");
+        if (anime.rated()) {
+            Button remove = button(t("Rimuovi voto", "Remove rating"), "rating-editor-remove", () ->
+                confirm(t("Rimuovere il voto?", "Remove this rating?"), t("L'anime uscirà dalla classifica. Le visioni non cambieranno.",
                 "This anime will leave your ranking. Its viewings will not change."), () -> {
                     if (mutate(() -> library.setRating(anime.id, Map.of()))) { closeModal(dialog); afterLibraryChange(); refreshDetail(); }
-                })));
-        actions.getChildren().addAll(spacer(), button(optional ? t("Non ora", "Not now") : t("Annulla", "Cancel"), "quiet", () -> closeModal(dialog)), save);
+                }));
+            remove.setId("rating-remove");
+            actions.getChildren().add(remove);
+        }
+        Button cancel = button(optional ? t("Non ora", "Not now") : t("Annulla", "Cancel"), "rating-editor-cancel", () -> closeModal(dialog));
+        cancel.setId("rating-cancel");
+        actions.getChildren().addAll(spacer(), cancel, save);
         body.getChildren().add(actions);
-        update[0] = () -> {
-            int sum = 0;
-            for (RatingCategory category : RatingCategory.values()) sum += special.get(category).getStyleClass().contains("rating-special-selected")
-                ? 12 : (int)Math.round(controls.get(category).getValue());
-            overall.setText(number(sum / 10.0)); validation.setText("");
+
+        Runnable update = () -> {
+            int sum = inputs.values().stream().mapToInt(RatingInput::value).sum();
+            overall.setText(number(sum / (double) inputs.size()));
+            RatingCategory bonus = specials.getSelectedToggle() == null ? null : (RatingCategory) specials.getSelectedToggle().getUserData();
+            specialStatus.setText(bonus == null ? t("12 speciale disponibile", "Special score 12 available")
+                : "12 · " + (en() ? bonus.en : bonus.it));
+            specialStatus.pseudoClassStateChanged(bonusActive, bonus != null);
+            validation.setText("");
         };
-        update[0].run();
+        inputs.values().forEach(input -> input.slider().valueProperty().addListener((obs, before, after) -> update.run()));
+        specials.selectedToggleProperty().addListener((obs, before, after) -> update.run());
+        update.run();
+    }
+
+    private record RatingInput(Slider slider, ToggleButton bonus) {
+        int value() { return bonus.isSelected() ? 12 : (int) Math.round(slider.getValue()); }
+    }
+
+    private Button ratingHelp(RatingCategory category, String caption) {
+        Tooltip tooltip = new Tooltip(en() ? category.helpEn : category.helpIt);
+        tooltip.setWrapText(true);
+        tooltip.setMaxWidth(290);
+        tooltip.setAutoHide(true);
+        Button help = new Button("?");
+        help.getStyleClass().add("rating-editor-help");
+        help.setTooltip(tooltip);
+        help.setAccessibleText(t("Cosa significa ", "What does this mean: ") + caption);
+        help.setAccessibleHelp(tooltip.getText());
+        help.setOnAction(event -> {
+            if (tooltip.isShowing()) { tooltip.hide(); return; }
+            Bounds target = help.localToScreen(help.getBoundsInLocal());
+            if (target != null) tooltip.show(help, target.getMinX(), target.getMaxY() + 5);
+        });
+        return help;
     }
 
     private void rankingPage() {
@@ -1592,7 +1820,7 @@ public class App extends Application {
         clip.setArcHeight(34);
         poster.setClip(clip);
 
-        Button card = rankingButton(anime, position, "ranking-podium-card", poster);
+        Button card = rankingButton(anime, position, "ranking-podium-card", poster, cover);
         card.getStyleClass().add(switch (position) {
             case 1 -> "ranking-gold";
             case 2 -> "ranking-silver";
@@ -1616,10 +1844,11 @@ public class App extends Application {
         SVGPath chevron = new SVGPath();
         chevron.setContent("M 1,1 L 5,5 L 1,9");
         chevron.getStyleClass().add("ranking-chevron");
-        HBox entry = new HBox(14, rank, image(covers, anime.coverImage, 42, 59, 12),
+        StackPane cover = image(covers, anime.coverImage, 42, 59, 12);
+        HBox entry = new HBox(14, rank, cover,
             title, rankingScore(anime), chevron);
         entry.setAlignment(Pos.CENTER_LEFT);
-        Button button = rankingButton(anime, position, "ranking-entry", entry);
+        Button button = rankingButton(anime, position, "ranking-entry", entry, cover);
         entry.prefWidthProperty().bind(button.widthProperty().subtract(32));
         entry.setMinWidth(0);
         button.setMinHeight(82);
@@ -1629,8 +1858,8 @@ public class App extends Application {
         return button;
     }
 
-    private Button rankingButton(Anime anime, int position, String style, Node content) {
-        Button button = button("", style, () -> showDetails(anime, false));
+    private Button rankingButton(Anime anime, int position, String style, Node content, StackPane cover) {
+        Button button = button("", style, () -> showDetails(anime, false, cover));
         button.setGraphic(content);
         button.setAccessibleText("#" + position + " · " + anime.title + " · "
             + t("Voto ", "Rating ") + number(anime.overall()));
@@ -2391,7 +2620,7 @@ public class App extends Application {
         }
 
         private void openCurrent() {
-            if (!slides.isEmpty()) showDetails(slides.get(position), false);
+            if (!slides.isEmpty()) showDetails(slides.get(position), false, poster);
         }
 
         private void moveManually(int direction) {
@@ -2911,6 +3140,10 @@ public class App extends Application {
     }
 
     private StackPane modal(String title, VBox body, double width, boolean dismissible) {
+        return modal(title, body, width, dismissible, true);
+    }
+
+    private StackPane modal(String title, VBox body, double width, boolean dismissible, boolean enter) {
         hideCardPopup();
         VBox surface = new VBox(20); surface.getStyleClass().add("modal-surface");
         surface.setMaxWidth(width); surface.setMaxHeight(Region.USE_PREF_SIZE);
@@ -2918,30 +3151,59 @@ public class App extends Application {
         double preferredHeight = width >= 1000 ? 10000 : width >= 800 ? 550 : width >= 650 ? 750 : 440;
         surface.maxHeightProperty().bind(root.heightProperty().subtract(60).map(h -> Math.min(preferredHeight, h.doubleValue())));
         HBox heading = row(label(title, "section-title"), spacer());
+        heading.getStyleClass().add("modal-heading");
         StackPane overlay = new StackPane(surface); overlay.getStyleClass().add("modal-shade"); overlay.setPadding(new Insets(30));
         overlay.getProperties().put("dismissible", dismissible);
-        if (dismissible) heading.getChildren().add(button("✕", "quiet", () -> closeModal(overlay)));
+        if (dismissible) {
+            Button close = button("✕", "quiet", () -> closeModal(overlay));
+            close.getStyleClass().add("modal-close");
+            close.setAccessibleText(t("Chiudi", "Close"));
+            heading.getChildren().add(close);
+        }
         surface.getChildren().addAll(heading, body);
         VBox.setVgrow(body, Priority.ALWAYS); body.setMinHeight(0);
         if (!modals.isEmpty()) modals.peek().setDisable(true);
         if (shell != null) shell.setDisable(true);
         surface.setFocusTraversable(true);
         modals.push(overlay); root.getChildren().add(overlay); syncCarousel();
-        entrance(surface, 0); Platform.runLater(surface::requestFocus); return overlay;
+        if (enter) {
+            entrance(surface, 0);
+            Platform.runLater(surface::requestFocus);
+        }
+        return overlay;
     }
     private void closeModal(StackPane overlay) {
+        if (!closed && overlay == detailModal && overlay == modals.peek() && detailMotion != null) {
+            detailGeneration++;
+            detailMotion.close(() -> removeModal(overlay));
+            return;
+        }
+        removeModal(overlay);
+    }
+    private void removeModal(StackPane overlay) {
         Object dispose = overlay.getProperties().remove("dispose");
         if (dispose instanceof Runnable action) action.run();
         root.getChildren().remove(overlay); modals.remove(overlay);
         if (!modals.isEmpty()) modals.peek().setDisable(false);
         if (shell != null) shell.setDisable(!modals.isEmpty());
-        if (overlay == detailModal) { detailGeneration++; detailModal = null; detailBody = null; currentDetail = null; detailHistory.clear(); }
+        if (overlay == detailModal) {
+            if (detailMotion != null) detailMotion.dispose();
+            detailMotion = null;
+            if (!closed && modals.isEmpty() && detailReturnFocus != null && detailReturnFocus.getScene() == root.getScene())
+                detailReturnFocus.requestFocus();
+            detailReturnFocus = null;
+            detailGeneration++;
+            detailModal = null;
+            detailBody = null;
+            currentDetail = null;
+            detailHistory.clear();
+        }
         syncCarousel();
     }
     private void closeTopModal() {
         if (!modals.isEmpty() && Boolean.TRUE.equals(modals.peek().getProperties().get("dismissible"))) closeModal(modals.peek());
     }
-    private void closeAllModals() { while (!modals.isEmpty()) closeModal(modals.peek()); }
+    private void closeAllModals() { while (!modals.isEmpty()) removeModal(modals.peek()); }
     private void message(String title, String text) {
         VBox body = new VBox(20, label(text, "body")); StackPane dialog = modal(title, body, 600, true);
         body.getChildren().add(button("OK", "primary", () -> closeModal(dialog)));

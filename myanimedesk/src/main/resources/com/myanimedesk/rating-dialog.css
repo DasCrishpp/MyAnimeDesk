@@ -1,0 +1,260 @@
+.rating-editor-modal .modal-surface {
+    -fx-background-color: linear-gradient(to bottom, #1b142b, #120e20 65%, #151024);
+    -fx-background-radius: 24;
+    -fx-border-color: rgba(206, 170, 255, 0.29);
+    -fx-border-radius: 24;
+    -fx-padding: 12 19 16;
+    -fx-spacing: 10;
+}
+
+.rating-editor-modal .modal-heading {
+    -fx-padding: 0 2 1 5;
+}
+
+.rating-editor-modal .modal-heading .section-title {
+    -fx-text-fill: #e7d5f8;
+    -fx-font-size: 14;
+}
+
+.rating-editor-modal .button.modal-close {
+    -fx-min-width: 35;
+    -fx-min-height: 35;
+    -fx-padding: 0;
+    -fx-background-color: #2a1f3c;
+    -fx-background-radius: 22;
+    -fx-border-color: rgba(207, 176, 249, 0.29);
+    -fx-border-radius: 22;
+}
+
+.rating-editor-modal .button.modal-close:hover {
+    -fx-background-color: #513671;
+}
+
+.rating-editor-summary {
+    -fx-padding: 12 12 12 17;
+    -fx-spacing: 14;
+    -fx-background-color: linear-gradient(to right, #2c1f40, #33214e 68%, #472c69);
+    -fx-background-radius: 15;
+    -fx-border-color: rgba(202, 163, 255, 0.32);
+    -fx-border-radius: 15;
+}
+
+.rating-editor-title {
+    -fx-text-fill: #fff7ff;
+    -fx-font-size: 27;
+    -fx-font-weight: bold;
+}
+
+.rating-editor-hint {
+    -fx-text-fill: #d9c7ed;
+    -fx-font-size: 13;
+}
+
+.rating-editor-special-state {
+    -fx-padding: 6 10;
+    -fx-background-color: rgba(247, 196, 122, 0.1);
+    -fx-background-radius: 12;
+    -fx-border-color: rgba(246, 196, 127, 0.36);
+    -fx-border-radius: 12;
+    -fx-text-fill: #fad8aa;
+    -fx-font-size: 12;
+    -fx-font-weight: bold;
+}
+
+.rating-editor-special-state:bonus-active {
+    -fx-background-color: #59402f;
+    -fx-border-color: #ca965e;
+    -fx-text-fill: #ffe3b9;
+}
+
+.rating-editor-readout {
+    -fx-min-width: 112;
+    -fx-padding: 5 12;
+    -fx-background-color: rgba(20, 12, 35, 0.62);
+    -fx-background-radius: 12;
+    -fx-border-color: rgba(230, 196, 255, 0.49);
+    -fx-border-radius: 12;
+}
+
+.rating-editor-average-label {
+    -fx-text-fill: #e0cff3;
+    -fx-font-size: 11;
+    -fx-font-weight: bold;
+}
+
+.rating-editor-average {
+    -fx-text-fill: #fff5ff;
+    -fx-font-size: 37;
+    -fx-font-weight: bold;
+}
+
+.rating-editor-scroll,
+.rating-editor-scroll > .viewport {
+    -fx-background-color: transparent;
+}
+
+.rating-editor-scroll > .scroll-bar:vertical .thumb {
+    -fx-background-color: #6e518e;
+}
+
+.rating-editor-grid {
+    -fx-padding: 0 3 1 0;
+}
+
+.rating-editor-criterion {
+    -fx-padding: 6 11 8;
+    -fx-background-color: #221831;
+    -fx-background-radius: 11;
+    -fx-border-color: rgba(183, 145, 227, 0.24);
+    -fx-border-radius: 11;
+}
+
+.rating-editor-criterion:bonus-active {
+    -fx-background-color: linear-gradient(to right, #2e203a, #3b2939);
+    -fx-border-color: rgba(241, 188, 110, 0.59);
+}
+
+.rating-editor-category {
+    -fx-text-fill: #fbf3ff;
+    -fx-font-size: 14;
+    -fx-font-weight: bold;
+}
+
+.rating-editor-modal .button.rating-editor-help {
+    -fx-min-width: 21;
+    -fx-min-height: 21;
+    -fx-padding: 0;
+    -fx-font-size: 11;
+    -fx-background-color: #352647;
+    -fx-background-radius: 14;
+    -fx-border-color: rgba(218, 181, 254, 0.31);
+    -fx-border-radius: 14;
+    -fx-text-fill: #eddefb;
+}
+
+.rating-editor-modal .button.rating-editor-help:hover {
+    -fx-background-color: #553e6c;
+}
+
+.rating-editor-value {
+    -fx-alignment: center;
+    -fx-min-width: 38;
+    -fx-padding: 1 5;
+    -fx-background-color: #392751;
+    -fx-background-radius: 8;
+    -fx-text-fill: #f4e7ff;
+    -fx-font-size: 21;
+    -fx-font-weight: bold;
+}
+
+.rating-editor-criterion:bonus-active .rating-editor-value {
+    -fx-background-color: #5b4132;
+    -fx-text-fill: #ffdfad;
+}
+
+.rating-editor-range {
+    -fx-spacing: 8;
+}
+
+.rating-editor-endpoint {
+    -fx-text-fill: #cdbada;
+    -fx-font-size: 11;
+}
+
+.rating-editor-slider > .track {
+    -fx-pref-height: 6;
+    -fx-background-color: -score-track;
+    -fx-background-radius: 8;
+}
+
+.rating-editor-slider > .thumb {
+    -fx-background-color: #e7caff;
+    -fx-background-radius: 12;
+    -fx-padding: 7;
+    -fx-border-color: #8f61c4;
+    -fx-border-radius: 12;
+}
+
+.rating-editor-slider:hover > .thumb {
+    -fx-background-color: #faedff;
+}
+
+.rating-editor-slider > .axis {
+    -fx-tick-mark-stroke: #896fa3;
+}
+
+.rating-editor-slider:disabled {
+    -fx-opacity: 0.37;
+}
+
+.rating-editor-modal .toggle-button.rating-editor-bonus {
+    -fx-min-width: 42;
+    -fx-min-height: 27;
+    -fx-padding: 2 7;
+    -fx-background-color: #30242f;
+    -fx-background-radius: 8;
+    -fx-border-color: rgba(231, 179, 110, 0.40);
+    -fx-border-radius: 8;
+    -fx-text-fill: #f4cf99;
+    -fx-font-size: 13;
+}
+
+.rating-editor-modal .toggle-button.rating-editor-bonus:hover {
+    -fx-background-color: #5a4236;
+    -fx-border-color: #e8ba7f;
+}
+
+.rating-editor-modal .toggle-button.rating-editor-bonus:selected {
+    -fx-background-color: #eabf83;
+    -fx-border-color: #ffe2aa;
+    -fx-text-fill: #2d1c22;
+}
+
+.rating-editor-actions {
+    -fx-padding: 10 0 0;
+    -fx-border-color: rgba(188, 154, 231, 0.24) transparent transparent transparent;
+}
+
+.rating-editor-modal .button.rating-editor-cancel,
+.rating-editor-modal .button.rating-editor-remove,
+.rating-editor-modal .button.rating-editor-save {
+    -fx-background-radius: 10;
+    -fx-border-radius: 10;
+    -fx-padding: 9 15;
+}
+
+.rating-editor-modal .button.rating-editor-cancel {
+    -fx-background-color: #292039;
+    -fx-border-color: rgba(198, 161, 243, 0.28);
+    -fx-text-fill: #efe2ff;
+}
+
+.rating-editor-modal .button.rating-editor-remove {
+    -fx-background-color: transparent;
+    -fx-border-color: rgba(238, 135, 170, 0.27);
+    -fx-text-fill: #ffaac6;
+}
+
+.rating-editor-modal .button.rating-editor-save {
+    -fx-background-color: linear-gradient(to right, #a16af0, #774acd);
+    -fx-border-color: rgba(238, 218, 255, 0.53);
+    -fx-text-fill: #fff9ff;
+}
+
+.rating-editor-modal .button.rating-editor-cancel:hover {
+    -fx-background-color: #473359;
+}
+
+.rating-editor-modal .button.rating-editor-remove:hover {
+    -fx-background-color: #493047;
+}
+
+.rating-editor-modal .button.rating-editor-save:hover {
+    -fx-background-color: #955be9;
+}
+
+.keyboard-navigation .rating-editor-modal .button:focused,
+.keyboard-navigation .rating-editor-modal .toggle-button:focused,
+.keyboard-navigation .rating-editor-modal .rating-editor-slider:focused > .thumb {
+    -fx-border-color: #f6dbff;
+}
