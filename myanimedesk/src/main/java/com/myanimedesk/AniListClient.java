@@ -19,6 +19,9 @@ import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
@@ -80,6 +83,36 @@ public class AniListClient implements AutoCloseable {
         return results;
     }
 
+    public List<Anime> search(DiscoverQuery filter, int page, int perPage) throws IOException, InterruptedException {
+        boolean useText = !filter.text().isBlank();
+        boolean useGenre = !filter.genre().isBlank() && !Preferences.TAGS.contains(filter.genre());
+        boolean useTag = !filter.genre().isBlank() && !useGenre;
+        String sort = switch (filter.sort()) {
+            case TITLE_ASC -> "TITLE_ENGLISH";
+            case TITLE_DESC -> "TITLE_ENGLISH_DESC";
+            case RATING -> "SCORE_DESC";
+            case POPULARITY -> useText ? "SEARCH_MATCH" : "POPULARITY_DESC";
+        };
+        StringBuilder arguments = new StringBuilder("type:ANIME,sort:").append(sort);
+        StringBuilder declarations = new StringBuilder("$page:Int,$perPage:Int");
+        var variables = mapper.createObjectNode().put("page", page).put("perPage", perPage);
+        if (useText) { declarations.append(",$search:String"); arguments.append(",search:$search"); variables.put("search", filter.text()); }
+        if (useGenre) { declarations.append(",$genre:String"); arguments.append(",genre:$genre"); variables.put("genre", filter.genre()); }
+        if (useTag) { declarations.append(",$tag:String"); arguments.append(",tag:$tag"); variables.put("tag", filter.genre()); }
+        if (filter.year() > 0) { declarations.append(",$year:Int"); arguments.append(",seasonYear:$year"); variables.put("year", filter.year()); }
+        if (filter.status() != DiscoverQuery.Status.ANY) arguments.append(",status:").append(filter.status());
+        if (filter.format() != DiscoverQuery.Format.ANY) arguments.append(",format:").append(filter.format());
+        if (filter.season() != DiscoverQuery.Season.ANY) arguments.append(",season:").append(filter.season());
+        String query = "query(" + declarations + "){Page(page:$page,perPage:$perPage){media(" + arguments + "){" + animeFields() + "}}}";
+        String payload = mapper.createObjectNode().put("query", query).set("variables", variables).toString();
+        String key = "filtered:" + payload;
+        List<Anime> cached = cache.get(key);
+        if (cached != null) return new ArrayList<>(cached);
+        List<Anime> results = executePageQuery(payload);
+        cache.put(key, new ArrayList<>(results));
+        return results;
+    }
+
     /** Loads details from AniList, then transparently uses Jikan/MyAnimeList if needed. */
     public Anime getAnimeDetails(Anime anime) throws IOException, InterruptedException {
         if (anime == null) return null;
@@ -112,13 +145,58 @@ public class AniListClient implements AutoCloseable {
         return parseAnime(node);
     }
 
+    /** Walks only prequel/sequel TV links, avoiding OVAs, films and unrelated spin-offs. */
+    public List<Anime> seasons(Anime original) throws IOException, InterruptedException {
+        if (original == null || original.id <= 0 || original.id >= 1_000_000_000) return List.of();
+        Map<Integer, Anime> found = new LinkedHashMap<>();
+        Set<Integer> visited = new LinkedHashSet<>();
+        found.put(original.id, original);
+        Set<Integer> frontier = new LinkedHashSet<>(); frontier.add(original.id);
+        for (int depth = 0; depth < 6 && !frontier.isEmpty() && found.size() < 20; depth++) {
+            List<Integer> ids = frontier.stream().filter(id -> !visited.contains(id)).toList();
+            if (ids.isEmpty()) break;
+            visited.addAll(ids);
+            String gql = "query($ids:[Int]){Page(page:1,perPage:25){media(id_in:$ids,type:ANIME){id " +
+                "title{romaji english native} coverImage{large} format seasonYear season startDate{year month day} " +
+                "relations{edges{relationType(version:2) node{id type title{romaji english native} " +
+                "coverImage{large} format seasonYear season startDate{year month day}}}}}}}";
+            String payload = mapper.createObjectNode().put("query", gql)
+                .set("variables", mapper.createObjectNode().set("ids", mapper.valueToTree(ids))).toString();
+            Set<Integer> next = new LinkedHashSet<>();
+            for (Anime full : executePageQuery(payload)) {
+                found.put(full.id, full);
+                for (Anime.Relation relation : full.relations) {
+                    if (!("PREQUEL".equals(relation.type) || "SEQUEL".equals(relation.type))) continue;
+                    Anime linked = relation.anime;
+                    if (linked == null || linked.id <= 0 || !tvFormat(linked.format)) continue;
+                    found.putIfAbsent(linked.id, linked);
+                    if (!visited.contains(linked.id)) next.add(linked.id);
+                }
+            }
+            frontier = next;
+        }
+        List<Anime> ordered = new ArrayList<>(found.values());
+        ordered.removeIf(anime -> !tvFormat(anime.format) && anime.id != original.id);
+        ordered.sort(Comparator.comparingInt((Anime anime) -> anime.startDate > 0 ? anime.startDate : yearKey(anime.year))
+            .thenComparingInt(anime -> anime.id));
+        return ordered;
+    }
+
+    private static boolean tvFormat(String format) {
+        return "TV".equals(format) || "TV_SHORT".equals(format) || "TV Short".equals(format);
+    }
+
+    private static int yearKey(String year) {
+        try { return Integer.parseInt(year) * 10000; } catch (NumberFormatException ignored) { return Integer.MAX_VALUE; }
+    }
+
     private String detailFields() {
         return "description(asHtml: false) trailer { id site } siteUrl averageScore " +
             "characters(page: 1, perPage: 25, sort: [ROLE, RELEVANCE, ID]) { " +
             "pageInfo { hasNextPage } edges { role node { id name { full } image { medium } } " +
             "voiceActors(language: JAPANESE, sort: RELEVANCE) { name { full } image { medium } } } } " +
             "relations { edges { relationType(version: 2) node { id type title { romaji english native } " +
-            "coverImage { large } format episodes duration } } } ";
+            "coverImage { large } format episodes duration seasonYear season startDate { year month day } } } } ";
     }
 
     public Anime loadCastPage(int id, int page) throws IOException, InterruptedException {
@@ -145,11 +223,12 @@ public class AniListClient implements AutoCloseable {
         List<Anime> cached = cache.get(cacheKey);
         if (cached != null) return new ArrayList<>(cached);
 
+        boolean featured = "TRENDING".equalsIgnoreCase(mode);
         String sort = "POPULARITY_DESC";
         if ("RECENT".equalsIgnoreCase(mode)) {
             sort = "START_DATE_DESC";
         }
-        if ("TRENDING".equalsIgnoreCase(mode)) sort = "TRENDING_DESC";
+        if (featured) sort = "TRENDING_DESC";
 
         boolean useTag = filter != null && !filter.isBlank() && ("TAG".equalsIgnoreCase(mode) || Preferences.TAGS.contains(filter));
         boolean useGenre = !useTag && filter != null && !filter.isBlank();
@@ -179,14 +258,14 @@ public class AniListClient implements AutoCloseable {
                 .toString();
 
         List<Anime> results;
-        try { results = executePageQuery(payload); }
+        try { results = executePageQuery(payload, featured); }
         catch (IOException failure) {
             // Read the previous app's discover cache without changing it.
             results = legacyBrowse(mode, filter, page, perPage);
             if (results == null || useTag) throw failure;
         }
         if (useGenre) results.removeIf(a -> a.genres == null || !a.genres.contains(filter));
-        cache.put(cacheKey, new ArrayList<>(results));
+        if (!featured || !results.isEmpty()) cache.put(cacheKey, new ArrayList<>(results));
         return results;
     }
 
@@ -210,12 +289,16 @@ public class AniListClient implements AutoCloseable {
                 "title { romaji english native } " +
                 "coverImage { extraLarge large medium color } " +
                 "episodes duration genres format status seasonYear season " +
-                "startDate { year } " +
+                "startDate { year month day } " +
                 "studios(isMain: true) { nodes { name } } ";
     }
 
     private List<Anime> executePageQuery(String payload) throws IOException, InterruptedException {
-        JsonNode root = responseData(payload);
+        return executePageQuery(payload, false);
+    }
+
+    private List<Anime> executePageQuery(String payload, boolean featured) throws IOException, InterruptedException {
+        JsonNode root = responseData(payload, featured);
         JsonNode media = root.path("data").path("Page").path("media");
 
         List<Anime> out = new ArrayList<>();
@@ -230,6 +313,10 @@ public class AniListClient implements AutoCloseable {
 
     /** Cached API responses survive restarts; only successful, valid responses are cached. */
     private JsonNode responseData(String payload) throws IOException, InterruptedException {
+        return responseData(payload, false);
+    }
+
+    private JsonNode responseData(String payload, boolean featured) throws IOException, InterruptedException {
         Path saved;
         try {
             String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload.getBytes(StandardCharsets.UTF_8)));
@@ -241,27 +328,41 @@ public class AniListClient implements AutoCloseable {
         if (cataloguePage && Files.exists(saved) && Files.size(saved) <= 8 * 1024 * 1024) {
             try {
                 if (Files.getLastModifiedTime(saved).toInstant().isAfter(Instant.now().minus(6, ChronoUnit.HOURS))) {
-                    JsonNode root = mapper.readTree(saved.toFile()); throwIfGraphQLError(root); offline = false; return root;
+                    JsonNode root = mapper.readTree(saved.toFile());
+                    throwIfGraphQLError(root);
+                    if (!featured || hasFeaturedTitles(root)) { offline = false; return root; }
                 }
             } catch (IOException ignored) { /* A broken cache is bypassed and replaced by the next valid response. */ }
         }
         try {
             if (System.currentTimeMillis() < retryAfter) throw new IOException("AniList temporarily unavailable");
-            HttpResponse<String> response = sendWithRetry(payload);
+            HttpResponse<String> response = featured
+                ? client.send(createRequest(payload, Duration.ofSeconds(7)), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+                : sendWithRetry(payload);
             if (response.statusCode() != 200) {
                 if (response.statusCode() == 403 || response.statusCode() == 429) retryAfter = System.currentTimeMillis() + 30_000;
                 throw new IOException("AniList HTTP " + response.statusCode() + " - " + response.body());
             }
-            JsonNode root = mapper.readTree(response.body()); throwIfGraphQLError(root); offline = false;
+            JsonNode root = mapper.readTree(response.body());
+            throwIfGraphQLError(root);
+            if (featured && !hasFeaturedTitles(root)) throw new IOException("No trending anime returned");
+            offline = false;
             try { AtomicFiles.write(saved, response.body().getBytes(StandardCharsets.UTF_8)); } catch (IOException ignored) { }
             return root;
         } catch (IOException failure) {
             offline = true;
             if (Files.exists(saved) && Files.size(saved) <= 8 * 1024 * 1024) {
-                JsonNode root = mapper.readTree(saved.toFile()); throwIfGraphQLError(root); return root;
+                JsonNode root = mapper.readTree(saved.toFile());
+                throwIfGraphQLError(root);
+                if (!featured || hasFeaturedTitles(root)) return root;
             }
             throw failure;
         }
+    }
+
+    private boolean hasFeaturedTitles(JsonNode root) {
+        JsonNode media = root.path("data").path("Page").path("media");
+        return media.isArray() && !media.isEmpty();
     }
 
     private void throwIfGraphQLError(JsonNode root) throws IOException {
@@ -281,7 +382,7 @@ public class AniListClient implements AutoCloseable {
         IOException lastIo = null;
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
-                HttpResponse<String> resp = client.send(createRequest(payload), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                HttpResponse<String> resp = client.send(createRequest(payload, Duration.ofSeconds(18)), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
                 if (resp.statusCode() < 500) return resp;
                 if (attempt == 3) return resp;
             } catch (IOException e) {
@@ -297,10 +398,10 @@ public class AniListClient implements AutoCloseable {
         throw new IOException("Errore di rete sconosciuto con AniList");
     }
 
-    private HttpRequest createRequest(String payload) {
+    private HttpRequest createRequest(String payload, Duration timeout) {
         return HttpRequest.newBuilder()
                 .uri(endpoint)
-                .timeout(Duration.ofSeconds(18))
+                .timeout(timeout)
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("Accept", "application/json")
                 .header("User-Agent", "MyAnimeDesk/0.4.1")
@@ -321,6 +422,9 @@ public class AniListClient implements AutoCloseable {
         a.trailerSite = node.path("trailer").path("site").asText("");
         a.siteUrl = node.path("siteUrl").asText("");
         a.averageScore = node.path("averageScore").asInt(0);
+        int startYear = node.path("startDate").path("year").asInt(0);
+        if (startYear > 0) a.startDate = startYear * 10000 + node.path("startDate").path("month").asInt(1) * 100
+            + node.path("startDate").path("day").asInt(1);
         a.detailsLoaded = node.has("description");
         a.hasMoreCast = node.path("characters").path("pageInfo").path("hasNextPage").asBoolean(false);
         for (JsonNode edge : node.path("characters").path("edges")) {

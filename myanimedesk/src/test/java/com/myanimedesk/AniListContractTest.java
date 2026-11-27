@@ -16,12 +16,12 @@ public class AniListContractTest {
     private final AtomicReference<String> request = new AtomicReference<>();
     private static final String MEDIA = """
         {"id":42,"title":{"romaji":"Romaji","english":"Fixture"},"episodes":12,"duration":24,
-        "genres":["Action"],"format":"TV","status":"FINISHED","season":"SPRING","seasonYear":2024,
+        "genres":["Action"],"format":"TV","status":"FINISHED","season":"SPRING","seasonYear":2024,"startDate":{"year":2024,"month":4,"day":7},
         "description":"<b>Story</b>","bannerImage":"https://example.org/banner.jpg",
         "coverImage":{"large":"https://example.org/cover.jpg"},"trailer":{"site":"youtube","id":"abc_123"},
         "characters":{"pageInfo":{"hasNextPage":true},"edges":[{"role":"MAIN","node":{"id":7,"name":{"full":"Character"},"image":{"medium":"https://example.org/character.jpg"}},
         "voiceActors":[{"name":{"full":"Actor"},"image":{"medium":"https://example.org/actor.jpg"}}]}]},
-        "relations":{"edges":[{"relationType":"SEQUEL","node":{"id":43,"type":"ANIME","title":{"romaji":"Sequel"}}},{"relationType":"SOURCE","node":{"id":44,"type":"MANGA"}}]}}
+        "relations":{"edges":[{"relationType":"SEQUEL","node":{"id":43,"type":"ANIME","title":{"romaji":"Sequel"},"format":"TV","seasonYear":2025,"startDate":{"year":2025,"month":1,"day":1}}},{"relationType":"SOURCE","node":{"id":44,"type":"MANGA"}}]}}
         """;
     @Before public void startServer() throws Exception {
         server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
@@ -50,5 +50,30 @@ public class AniListContractTest {
         try(AniListClient api=client()){assertEquals(42,api.getAnimeById(42).id);assertFalse(api.isOffline());}
         unavailable.set(true);
         try(AniListClient api=client()){assertEquals(42,api.getAnimeById(42).id);assertTrue(api.isOffline());}
+    }
+    @Test public void filteredSearchUsesWhitelistedAniListArguments() throws Exception {
+        try (AniListClient api = client()) {
+            DiscoverQuery filter = new DiscoverQuery("hero", "Action", 2024, DiscoverQuery.Sort.RATING,
+                DiscoverQuery.Status.FINISHED, DiscoverQuery.Format.TV, DiscoverQuery.Season.SPRING);
+            assertEquals(1, api.search(filter, 2, 30).size());
+            String payload = request.get();
+            assertTrue(payload.contains("SCORE_DESC"));
+            assertTrue(payload.contains("seasonYear:$year"));
+            assertTrue(payload.contains("status:FINISHED"));
+            assertTrue(payload.contains("format:TV"));
+            assertTrue(payload.contains("season:SPRING"));
+            assertTrue(payload.contains("\"page\":2"));
+            assertTrue(payload.contains("\"genre\":\"Action\""));
+        }
+    }
+    @Test public void seasonsAreChronologicalAndExcludeNonAnimeRelations() throws Exception {
+        try (AniListClient api = client()) {
+            Anime original = api.getAnimeById(42);
+            assertEquals(20240407, original.startDate);
+            var seasons = api.seasons(original);
+            assertEquals(2, seasons.size());
+            assertEquals(42, seasons.get(0).id);
+            assertEquals(43, seasons.get(1).id);
+        }
     }
 }

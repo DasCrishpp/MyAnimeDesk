@@ -1,0 +1,354 @@
+.modal-shade.anime-detail-modal {
+    -fx-background-color: transparent;
+}
+
+.anime-detail-modal .modal-surface {
+    -fx-background-color: linear-gradient(to bottom, #1c142e, #120d22 42%, #100c1c);
+    -fx-background-radius: 25;
+    -fx-border-color: rgba(198,165,247,0.29);
+    -fx-border-radius: 25;
+    -fx-padding: 13 16 16;
+    -fx-spacing: 12;
+    -fx-effect: dropshadow(three-pass-box, rgba(4,2,11,0.68), 26, 0.13, 0, 9);
+}
+
+.anime-detail-modal .modal-heading {
+    -fx-padding: 0 3 0 9;
+}
+
+.anime-detail-modal .modal-heading .section-title {
+    -fx-font-size: 14;
+    -fx-text-fill: #dcc9f1;
+}
+
+.anime-detail-modal .modal-heading .button.modal-close {
+    -fx-min-width: 36;
+    -fx-min-height: 36;
+    -fx-padding: 0;
+    -fx-background-color: #2b2040;
+    -fx-background-radius: 24;
+    -fx-border-radius: 24;
+    -fx-border-color: rgba(206,177,246,0.28);
+    -fx-text-fill: #f7efff;
+}
+
+.anime-detail-modal .modal-heading .button.modal-close:hover,
+.keyboard-navigation .anime-detail-modal .modal-heading .button.modal-close:focused {
+    -fx-background-color: #4b346c;
+    -fx-border-color: #d8baf8;
+}
+
+.anime-detail-scroll, .anime-detail-scroll > .viewport {
+    -fx-background-color: transparent;
+}
+
+.anime-detail-scroll > .scroll-bar:vertical .thumb {
+    -fx-background-color: #5b4677;
+}
+
+.anime-detail-scroll > .scroll-bar:vertical .thumb:hover {
+    -fx-background-color: #9a75cb;
+}
+
+.anime-detail-content {
+    -fx-padding: 0 4 6 0;
+}
+
+.anime-detail-hero {
+    -fx-background-color: radial-gradient(center 83% 26%, radius 100%, derive(-desk-accent, -36%), #241932 61%, #160f26);
+    -fx-background-radius: 18;
+}
+
+.anime-detail-hero-shade {
+    -fx-background-color:
+        linear-gradient(to right, rgba(16,10,28,0.91) 0%, rgba(18,11,31,0.75) 48%, rgba(20,12,34,0.27) 100%),
+        linear-gradient(to top, rgba(13,8,24,0.94) 0%, rgba(15,9,26,0.25) 58%, transparent 100%);
+}
+
+.anime-detail-intro {
+    -fx-padding: 25 29;
+    -fx-alignment: center-left;
+}
+
+.anime-detail-cover {
+    -fx-background-color: linear-gradient(to bottom right, #48335f, #211630);
+    -fx-background-radius: 12;
+    -fx-effect: dropshadow(three-pass-box, rgba(6,3,13,0.57), 15, 0.12, 0, 5);
+}
+
+.anime-detail-title {
+    -fx-text-fill: #fffaff;
+    -fx-font-size: 39;
+    -fx-font-weight: bold;
+    -fx-line-spacing: 1;
+}
+
+.anime-detail-title.long-title {
+    -fx-font-size: 33;
+}
+
+.anime-detail-meta {
+    -fx-text-fill: #d9c9ea;
+    -fx-font-size: 13;
+    -fx-font-weight: bold;
+}
+
+.anime-detail-genres .tag {
+    -fx-background-color: rgba(54,35,78,0.92);
+    -fx-background-radius: 20;
+    -fx-border-color: rgba(216,188,251,0.30);
+    -fx-border-radius: 20;
+    -fx-text-fill: #eee0ff;
+    -fx-padding: 4 10;
+}
+
+.anime-detail-modal .button.anime-detail-trailer,
+.anime-detail-modal .button.anime-detail-rating-action {
+    -fx-background-color: linear-gradient(to bottom right, derive(-desk-accent, -10%), derive(-desk-accent, -31%));
+    -fx-background-radius: 20;
+    -fx-border-color: rgba(235,217,255,0.52);
+    -fx-border-radius: 20;
+    -fx-text-fill: #fffaff;
+    -fx-padding: 9 16;
+}
+
+.anime-detail-modal .button.anime-detail-trailer:hover,
+.anime-detail-modal .button.anime-detail-rating-action:hover {
+    -fx-background-color: derive(-desk-accent, -2%);
+}
+
+.anime-detail-modal .button.anime-detail-trailer:disabled {
+    -fx-background-color: #322642;
+    -fx-border-color: #675578;
+    -fx-text-fill: #ddd1eb;
+    -fx-opacity: 0.72;
+}
+
+.anime-detail-modal .button.quiet,
+.anime-detail-modal .button.anime-detail-source,
+.anime-detail-modal .button.anime-detail-favorite {
+    -fx-background-color: #2c2140;
+    -fx-background-radius: 12;
+    -fx-border-color: rgba(209,176,248,0.24);
+    -fx-border-radius: 12;
+    -fx-text-fill: #f1e6fc;
+    -fx-padding: 8 13;
+}
+
+.anime-detail-modal .button.anime-detail-source {
+    -fx-background-color: rgba(25,17,40,0.86);
+    -fx-background-radius: 20;
+    -fx-border-color: rgba(221,197,251,0.44);
+    -fx-border-radius: 20;
+    -fx-padding: 9 15;
+}
+
+.anime-detail-modal .button.quiet:hover,
+.anime-detail-modal .button.anime-detail-source:hover,
+.anime-detail-modal .button.anime-detail-favorite:hover {
+    -fx-background-color: #44335e;
+    -fx-border-color: #896caf;
+}
+
+.anime-detail-modal .button.anime-detail-favorite:selected {
+    -fx-background-color: #4a2545;
+    -fx-border-color: #b76392;
+    -fx-text-fill: #ffc8e8;
+}
+
+.anime-detail-modal .button.anime-detail-favorite:selected:hover {
+    -fx-background-color: #603057;
+}
+
+.keyboard-navigation .anime-detail-modal .button:focused {
+    -fx-border-color: #edceff;
+}
+
+.anime-detail-facts {
+    -fx-background-color: linear-gradient(to right, #241935, #191223);
+    -fx-background-radius: 12;
+    -fx-border-color: transparent transparent rgba(194,160,244,0.31) transparent;
+    -fx-border-radius: 12;
+    -fx-padding: 12 15;
+}
+
+.anime-detail-fact {
+    -fx-alignment: center-left;
+}
+
+.anime-detail-fact-value {
+    -fx-font-size: 23;
+    -fx-font-weight: bold;
+    -fx-text-fill: #fff7ff;
+}
+
+.anime-detail-fact-label {
+    -fx-font-size: 11;
+    -fx-text-fill: #c5b3da;
+}
+
+.anime-detail-bottom {
+    -fx-padding: 2 0 0;
+}
+
+.anime-detail-plot {
+    -fx-padding: 2 4 6;
+}
+
+.anime-detail-heading {
+    -fx-font-size: 19;
+    -fx-font-weight: bold;
+    -fx-text-fill: #f9efff;
+}
+
+.anime-detail-plot .synopsis {
+    -fx-text-fill: #dfd4ed;
+    -fx-font-size: 14;
+    -fx-line-spacing: 5;
+}
+
+.anime-detail-library {
+    -fx-background-color: linear-gradient(to bottom, #251934, #1b132a 62%, #171123);
+    -fx-background-radius: 17;
+    -fx-border-color: rgba(191,152,240,0.29);
+    -fx-border-radius: 17;
+    -fx-padding: 16;
+}
+
+.anime-detail-control-label {
+    -fx-font-size: 12;
+    -fx-font-weight: bold;
+    -fx-text-fill: #dbc9ed;
+}
+
+.anime-detail-library .separator .line {
+    -fx-border-color: rgba(184,150,224,0.22) transparent transparent transparent;
+}
+
+.anime-detail-library .status-selector,
+.anime-detail-library #view-count {
+    -fx-background-color: #1a122a;
+    -fx-background-radius: 10;
+    -fx-border-color: #543e6b;
+    -fx-border-radius: 10;
+}
+
+.anime-detail-library .status-selector:hover,
+.anime-detail-library #view-count:hover {
+    -fx-border-color: #a07cc5;
+}
+
+.anime-detail-library .status-selector > .list-cell {
+    -fx-background-radius: 7;
+    -fx-padding: 10 12;
+}
+
+.keyboard-navigation .anime-detail-library .status-selector:focused,
+.keyboard-navigation .anime-detail-library #view-count:focused {
+    -fx-border-color: #d7b7f6;
+}
+
+.anime-detail-library #view-count .text-field {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-font-weight: bold;
+    -fx-text-fill: white;
+}
+
+.anime-detail-library #view-count .increment-arrow-button,
+.anime-detail-library #view-count .decrement-arrow-button {
+    -fx-background-color: #38294e;
+}
+
+.anime-detail-library #view-count .increment-arrow-button:hover,
+.anime-detail-library #view-count .decrement-arrow-button:hover {
+    -fx-background-color: #543b74;
+}
+
+.anime-detail-folders {
+    -fx-background-color: rgba(151,114,202,0.10);
+    -fx-background-radius: 9;
+    -fx-padding: 8 9;
+}
+
+.anime-detail-folders .folder-names {
+    -fx-text-fill: #ddccec;
+    -fx-font-size: 12;
+}
+
+.anime-detail-modal .button.anime-detail-remove {
+    -fx-background-color: transparent;
+    -fx-border-color: rgba(239,135,167,0.25);
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-text-fill: #f9a8bf;
+    -fx-padding: 7 11;
+}
+
+.anime-detail-modal .button.anime-detail-remove:hover {
+    -fx-background-color: #482539;
+    -fx-border-color: #a55574;
+}
+
+.anime-detail-modal .button.anime-detail-rating-action {
+    -fx-background-radius: 12;
+    -fx-border-radius: 12;
+}
+
+.anime-detail-rating-value {
+    -fx-font-size: 32;
+    -fx-font-weight: bold;
+    -fx-text-fill: #e0c8ff;
+}
+
+.anime-detail-disclosure > .title {
+    -fx-background-color: #241a34;
+    -fx-background-radius: 11;
+    -fx-border-color: rgba(181,148,226,0.23);
+    -fx-border-radius: 11;
+    -fx-padding: 12 14;
+    -fx-font-weight: bold;
+    -fx-font-size: 13;
+}
+
+.anime-detail-disclosure > .title:hover,
+.anime-detail-disclosure:expanded > .title {
+    -fx-background-color: #332448;
+    -fx-border-color: rgba(206,166,250,0.43);
+}
+
+.keyboard-navigation .anime-detail-disclosure:focused > .title {
+    -fx-border-color: #dfbbfa;
+}
+
+.anime-detail-disclosure > .content {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-padding: 9 0 0;
+}
+
+.anime-detail-disclosure .list-row,
+.anime-detail-disclosure .panel {
+    -fx-background-color: #1f172d;
+    -fx-background-radius: 10;
+    -fx-border-color: rgba(185,152,231,0.20);
+    -fx-border-radius: 10;
+}
+
+.anime-detail-disclosure .season-entry:hover,
+.keyboard-navigation .anime-detail-disclosure .season-entry:focused {
+    -fx-background-color: #36284d;
+    -fx-border-color: #9475b8;
+}
+
+.anime-detail-notice {
+    -fx-background-color: #292039;
+    -fx-background-radius: 10;
+    -fx-border-color: rgba(193,155,244,0.25);
+    -fx-border-radius: 10;
+    -fx-padding: 7 11;
+}
+
+.anime-detail-notice .muted {
+    -fx-text-fill: #decdec;
+}
